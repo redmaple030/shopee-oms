@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 import pandas as pd
 from datetime import datetime
 import os
-import webbrowser # 用於開啟超連結(如果未來需要)
+import webbrowser 
 
 # 設定 Excel 檔案名稱
 FILE_NAME = 'sales_data.xlsx'
@@ -604,4 +604,5 @@ if __name__ == "__main__":
     style = ttk.Style()
     style.theme_use('clam')
     app = SalesApp(root)
+
     root.mainloop()
