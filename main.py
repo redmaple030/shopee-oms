@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 import pandas as pd
 from datetime import datetime
 import os
-import webbrowser 
+import webbrowser # 用於開啟超連結(如果未來需要)
 
 # 設定 Excel 檔案名稱
 FILE_NAME = 'sales_data.xlsx'
@@ -127,6 +127,7 @@ class SalesApp:
         r1.pack(fill="x", pady=2)
         ttk.Label(r1, text="訂單日期:").pack(side="left")
         ttk.Entry(r1, textvariable=self.var_date, width=12).pack(side="left", padx=5)
+
         chk = ttk.Checkbutton(r1, text="填寫顧客/寄送資料", variable=self.var_enable_cust, command=self.toggle_cust_info)
         chk.pack(side="left", padx=20)
 
@@ -217,8 +218,13 @@ class SalesApp:
         f1 = ttk.Frame(fee_frame)
         f1.pack(fill="x")
         ttk.Label(f1, text="手續費率 (%):").pack(side="left")
+        # 這裡加入提示文字
+        ttk.Label(f1, text="(預設蝦皮手續費為14.5%)", foreground="gray", font=("微軟正黑體", 9)).pack(side="right", padx=2)
+
         e_rate = ttk.Entry(f1, textvariable=self.var_fee_rate, width=5)
         e_rate.pack(side="left", padx=5)
+        
+
         e_rate.bind('<KeyRelease>', self.update_totals_event)
 
         f2 = ttk.Frame(fee_frame)
@@ -267,8 +273,8 @@ class SalesApp:
         ttk.Label(frame_add, text="3. 預設進貨成本:", font=("bold", 10)).pack(anchor="w", pady=(10,5))
         ttk.Entry(frame_add, textvariable=self.var_add_cost).pack(fill="x", pady=5)
 
-        ttk.Button(frame_add, text="＋ 新增至資料庫", command=self.submit_new_product).pack(fill="x", pady=20)
-        ttk.Label(frame_add, text="※ 若商品已存在，請使用右側更新功能", foreground="gray", wraplength=200).pack()
+        ttk.Button(frame_add, text="+ 新增至資料庫", command=self.submit_new_product).pack(fill="x", pady=20)
+        ttk.Label(frame_add, text="※ 若商品已存在，請使用右側更新功能", foreground="gray", wraplength=300).pack()
 
         # === 右側：更新商品專區 ===
         frame_upd = ttk.LabelFrame(paned, text="【更新】維護既有商品", padding=15)
@@ -350,7 +356,7 @@ class SalesApp:
         ttk.Label(license_frame, text=license_text, font=("微軟正黑體", 10), foreground="#555", justify="left").pack(anchor="w")
 
         # 版本號
-        ttk.Label(frame, text="Version 2.0 (OMS Edition)", foreground="gray").pack(side="bottom", pady=20)
+        ttk.Label(frame, text="Version 2.1 (OMS Edition)", foreground="gray").pack(side="bottom", pady=20)
 
     # ---------------- 邏輯功能區 ----------------
 
@@ -602,7 +608,11 @@ class SalesApp:
 if __name__ == "__main__":
     root = tk.Tk()
     style = ttk.Style()
-    style.theme_use('clam')
+    # 【修改點 3】 使用 'vista' 主題 (Windows原生樣式) 以確保 Checkbutton 是打勾(✓)而不是叉(X)
+    # 若在非 Windows 系統上可能會報錯，會自動退回預設
+    try:
+        style.theme_use('vista') 
+    except:
+        pass # 如果不支援 vista 主題就使用預設，預設通常也是打勾
     app = SalesApp(root)
-
     root.mainloop()
