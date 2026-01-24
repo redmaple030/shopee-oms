@@ -361,7 +361,9 @@ class SalesApp:
         license_text = (
             "● 本軟體以開源 (Open Source) 精神發布，永久免費供個人使用。\n"
             "● 禁止將本軟體進行打包販售、營利或做為商業課程教材。\n"
-            "● 軟體按「現狀」提供，請務必定期備份 Excel 檔案。"
+            "● 軟體按「現狀」提供，請務必定期備份 Excel 檔案。\n"
+            "● 只要把Excel跟本系統放在同一個目錄內就可以保存以前的紀錄\n"
+
         )
         ttk.Label(license_frame, text=license_text, font=("微軟正黑體", 10), foreground="#555", justify="left").pack(anchor="w")
 
