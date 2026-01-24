@@ -254,11 +254,11 @@ class SalesApp:
         sum_frame = ttk.Frame(right_frame, relief="groove", padding=5)
         sum_frame.pack(fill="x", side="bottom")
         
-        self.lbl_gross = ttk.Label(sum_frame, text="總金額: $0")
+        self.lbl_gross = ttk.Label(sum_frame, text="總金額: $0",font=("bold", 11))
         self.lbl_gross.pack(anchor="w")
-        self.lbl_fee = ttk.Label(sum_frame, text="扣費: $0", foreground="blue")
+        self.lbl_fee = ttk.Label(sum_frame, text="扣費: $0", foreground="blue", font=("bold", 11))
         self.lbl_fee.pack(anchor="w")
-        self.lbl_income = ttk.Label(sum_frame, text="預估入帳: $0", foreground="#d9534f", font=("bold", 10))
+        self.lbl_income = ttk.Label(sum_frame, text="預估入帳: $0", foreground="#ff0800", font=("bold", 12))
         self.lbl_income.pack(anchor="w")
         self.lbl_profit = ttk.Label(sum_frame, text="實收淨利: $0", foreground="green", font=("bold", 12))
         self.lbl_profit.pack(anchor="w")
@@ -352,8 +352,8 @@ class SalesApp:
         contact_frame = ttk.LabelFrame(frame, text="聯絡開發者", padding=20)
         contact_frame.pack(fill="x", padx=50, pady=10)
         
-        ttk.Label(contact_frame, text="程式設計者: [您的名字]", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
-        ttk.Label(contact_frame, text="聯絡信箱: [Email]", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
+        ttk.Label(contact_frame, text="程式設計者: 紅楓", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
+        ttk.Label(contact_frame, text="聯絡信箱: az062596216@gmail.com", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
         
         license_frame = ttk.LabelFrame(frame, text="使用與授權聲明", padding=20)
         license_frame.pack(fill="x", padx=50, pady=10)
@@ -365,7 +365,7 @@ class SalesApp:
         )
         ttk.Label(license_frame, text=license_text, font=("微軟正黑體", 10), foreground="#555", justify="left").pack(anchor="w")
 
-        ttk.Label(frame, text="Version 2.3 (Shopee 2026 Updated)", foreground="gray").pack(side="bottom", pady=20)
+        ttk.Label(frame, text="Version 2.2 (Shopee 2026 Updated)", foreground="gray").pack(side="bottom", pady=20)
 
     # ---------------- 邏輯功能區 ----------------
 
