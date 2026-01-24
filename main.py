@@ -286,7 +286,7 @@ class SalesApp:
         ttk.Entry(frame_add, textvariable=self.var_add_cost).pack(fill="x", pady=5)
 
         ttk.Button(frame_add, text="＋ 新增至資料庫", command=self.submit_new_product).pack(fill="x", pady=20)
-        ttk.Label(frame_add, text="※ 若商品已存在，請使用右側更新功能", foreground="gray", wraplength=200).pack()
+        ttk.Label(frame_add, text="※ 若商品已存在，請使用右側更新功能", foreground="gray", wraplength=300).pack()
 
         # === 右側：更新商品專區 ===
         frame_upd = ttk.LabelFrame(paned, text="【更新】維護既有商品", padding=15)
@@ -362,7 +362,7 @@ class SalesApp:
             "● 本軟體以開源 (Open Source) 精神發布，永久免費供個人使用。\n"
             "● 禁止將本軟體進行打包販售、營利或做為商業課程教材。\n"
             "● 軟體按「現狀」提供，請務必定期備份 Excel 檔案。\n"
-            "● 只要把Excel跟本系統放在同一個目錄內就可以保存以前的紀錄\n"
+            "● 只要把Excel跟本系統放在同一個目錄內就可以保存以前的紀錄繼續使用\n"
 
         )
         ttk.Label(license_frame, text=license_text, font=("微軟正黑體", 10), foreground="#555", justify="left").pack(anchor="w")
@@ -646,3 +646,4 @@ if __name__ == "__main__":
         
     app = SalesApp(root)
     root.mainloop()
+
