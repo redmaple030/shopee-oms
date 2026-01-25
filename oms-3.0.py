@@ -1,3 +1,4 @@
+#oms 3.0 版本
 import tkinter as tk
 from tkinter import ttk, messagebox
 import pandas as pd
@@ -806,3 +807,4 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
+
