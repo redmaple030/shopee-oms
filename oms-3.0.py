@@ -1,15 +1,34 @@
-#oms 3.0 版本
+#shopee-oms 3.2 測試版
+
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, font
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta  # 引入 timedelta 來處理時區加減
 import os
 import re
+import pickle
+import threading 
+import hashlib
+
+# --- Google Drive 相關套件 ---
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    GOOGLE_LIB_INSTALLED = True
+except ImportError:
+    GOOGLE_LIB_INSTALLED = False
 
 # 設定 Excel 檔案名稱
 FILE_NAME = 'sales_data.xlsx'
+CREDENTIALS_FILE = 'credentials.json' 
+TOKEN_FILE = 'token.json'             
+SCOPES = ['https://www.googleapis.com/auth/drive.file'] 
 
-# 台灣縣市列表
+# 設定雲端硬碟上的備份資料夾名稱
+BACKUP_FOLDER_NAME = "蝦皮進銷存系統_備份"
+
 TAIWAN_CITIES = [
     "基隆市", "臺北市", "新北市", "桃園市", "新竹市", "新竹縣", "苗栗縣",
     "臺中市", "彰化縣", "南投縣", "雲林縣", "嘉義市", "嘉義縣", "臺南市",
@@ -17,20 +36,17 @@ TAIWAN_CITIES = [
     "海外", "面交"
 ]
 
-# 交易平台列表 (來源)
 PLATFORM_OPTIONS = [
     "蝦皮購物", "賣貨便(7-11)", "好賣家(全家)", "旋轉拍賣", 
     "官方網站", "Facebook社團", "IG", "PChome", "Momo", "實體店面/面交"
 ]
 
-# 寄送方式列表 (純物流)
 SHIPPING_METHODS = [
     "7-11", "全家", "萊爾富", "OK超商", "蝦皮店到店", 
     "蝦皮店到店-隔日到貨", "蝦皮店到宅",
     "黑貓宅急便", "新竹物流", "郵局掛號", "賣家宅配", "面交/自取"
 ]
 
-# 蝦皮 2026/1/1 後新版手續費方案
 SHOPEE_FEE_OPTIONS = [
     "自訂手動輸入",
     "一般賣家-平日 (14.0%)",         
@@ -43,39 +59,156 @@ SHOPEE_FEE_OPTIONS = [
     "商城-較長備貨-促銷 (23.9%)"
 ]
 
+class GoogleDriveSync:
+    """處理 Google Drive 認證、資料夾管理、上傳與下載邏輯"""
+    def __init__(self):
+        self.creds = None
+        self.service = None
+        self.is_authenticated = False
+        self.folder_id = None 
+
+    def authenticate(self):
+        """執行 OAuth 登入流程"""
+        if not GOOGLE_LIB_INSTALLED:
+            return False, "未安裝 Google 套件，請執行: pip install google-api-python-client google-auth-oauthlib"
+        
+        if not os.path.exists(CREDENTIALS_FILE):
+            return False, f"找不到 {CREDENTIALS_FILE}。\n請至 Google Cloud 下載憑證並放入資料夾。"
+
+        try:
+            if os.path.exists(TOKEN_FILE):
+                with open(TOKEN_FILE, 'rb') as token:
+                    self.creds = pickle.load(token)
+            
+            if not self.creds or not self.creds.valid:
+                if self.creds and self.creds.expired and self.creds.refresh_token:
+                    self.creds.refresh(Request())
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+                    self.creds = flow.run_local_server(port=0)
+                
+                with open(TOKEN_FILE, 'wb') as token:
+                    pickle.dump(self.creds, token)
+
+            self.service = build('drive', 'v3', credentials=self.creds)
+            self.is_authenticated = True
+            
+            self.folder_id = self.get_or_create_folder()
+            
+            return True, "登入成功！"
+        except Exception as e:
+            return False, f"登入失敗: {str(e)}"
+
+    def get_or_create_folder(self):
+        """檢查是否存在備份資料夾，若無則建立"""
+        try:
+            query = f"mimeType='application/vnd.google-apps.folder' and name='{BACKUP_FOLDER_NAME}' and trashed=false"
+            results = self.service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+            items = results.get('files', [])
+            
+            if not items:
+                file_metadata = {
+                    'name': BACKUP_FOLDER_NAME,
+                    'mimeType': 'application/vnd.google-apps.folder'
+                }
+                folder = self.service.files().create(body=file_metadata, fields='id').execute()
+                return folder.get('id')
+            else:
+                return items[0].get('id')
+        except Exception as e:
+            print(f"資料夾建立失敗: {e}")
+            return None
+
+    def upload_file(self, filepath):
+        """上傳檔案到指定資料夾"""
+        if not self.is_authenticated: return False, "尚未登入 Google 帳號"
+        if not self.folder_id: self.folder_id = self.get_or_create_folder()
+
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            file_name = f"[系統備份] {os.path.basename(filepath).replace('.xlsx', '')}_{timestamp}.xlsx"
+            
+            file_metadata = {
+                'name': file_name,
+                'parents': [self.folder_id] 
+            }
+            media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            
+            file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            return True, f"備份成功！\n雲端檔名: {file_name}\n位置: {BACKUP_FOLDER_NAME}"
+        except Exception as e:
+            return False, f"上傳失敗: {str(e)}"
+
+    def list_backups(self):
+        """列出備份資料夾內的檔案"""
+        if not self.is_authenticated: return []
+        if not self.folder_id: self.folder_id = self.get_or_create_folder()
+        
+        try:
+            query = f"'{self.folder_id}' in parents and trashed = false"
+            results = self.service.files().list(q=query, pageSize=20, fields="nextPageToken, files(id, name, createdTime)", orderBy="createdTime desc").execute()
+            items = results.get('files', [])
+            return items
+        except Exception as e:
+            print(f"List error: {e}")
+            return []
+
+    def download_file(self, file_id, save_path):
+        """下載並覆蓋檔案"""
+        if not self.is_authenticated: return False, "尚未登入"
+        
+        try:
+            request = self.service.files().get_media(fileId=file_id)
+            import io
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            with open(save_path, 'wb') as f:
+                f.write(fh.getbuffer())
+            return True, "還原成功！請重新啟動程式以載入新資料。"
+        except Exception as e:
+            return False, f"下載失敗: {str(e)}"
+
 class SalesApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("蝦皮/網拍進銷存系統 (OMS + 庫存管理 + 多平台排序版)")
+        self.root.title("蝦皮/網拍進銷存系統 (V3.6 時區修正版)")
         self.root.geometry("1280x850") 
+
+        # --- 字型設定 ---
+        self.default_font_size = 11
+        self.style = ttk.Style()
+        self.setup_fonts(self.default_font_size)
+
+        self.drive_manager = GoogleDriveSync()
 
         # --- 變數初始化 ---
         self.var_date = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
         self.var_search = tk.StringVar()
         
-        # 商品選擇暫存
+        self.var_font_size = tk.StringVar(value=str(self.default_font_size))
+
         self.var_sel_name = tk.StringVar()
         self.var_sel_cost = tk.DoubleVar(value=0)
         self.var_sel_price = tk.DoubleVar(value=0)
         self.var_sel_qty = tk.IntVar(value=1)
         self.var_sel_stock_info = tk.StringVar(value="--") 
         
-        # 訂單費用
         self.var_fee_rate_str = tk.StringVar() 
         self.var_extra_fee = tk.DoubleVar(value=0.0)
         self.var_fee_tag = tk.StringVar()
 
-        # 顧客與平台資料
         self.var_enable_cust = tk.BooleanVar(value=False)
         self.var_platform = tk.StringVar() 
         self.var_cust_name = tk.StringVar()
         self.var_cust_loc = tk.StringVar()
         self.var_ship_method = tk.StringVar()
 
-        # 購物車
         self.cart_data = []
 
-        # --- 後台管理變數 ---
         self.var_add_tag = tk.StringVar()
         self.var_add_name = tk.StringVar()
         self.var_add_cost = tk.DoubleVar(value=0)
@@ -88,18 +221,39 @@ class SalesApp:
         self.var_upd_stock = tk.IntVar(value=0)
         self.var_upd_time = tk.StringVar(value="尚無資料")
 
-        # 檢查 Excel & 載入資料
         self.check_excel_file()
         self.products_df = self.load_products()
-        
-        # 建立 UI
+        self.is_vip = False # 預設不是 VIP
         self.create_tabs()
+    
+   
+
+    def setup_fonts(self, size):
+        default_font = font.nametofont("TkDefaultFont")
+        default_font.configure(family="微軟正黑體", size=size)
+        
+        text_font = font.nametofont("TkTextFont")
+        text_font.configure(family="微軟正黑體", size=size)
+
+        self.style.configure(".", font=("微軟正黑體", size))
+        self.style.configure("Treeview", rowheight=size*3) 
+        self.style.configure("Treeview.Heading", font=("微軟正黑體", size, "bold"))
+        self.style.configure("TLabelframe.Label", font=("微軟正黑體", size, "bold"))
+
+    def change_font_size(self, event=None):
+        try:
+            new_size = int(self.var_font_size.get())
+            self.setup_fonts(new_size)
+        except:
+            pass
+
+    
+    
 
     def check_excel_file(self):
         if not os.path.exists(FILE_NAME):
             try:
                 with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                    # 銷售紀錄表
                     cols_sales = [
                         "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
                         "商品名稱", "數量", "單價(售)", "單價(進)", 
@@ -108,10 +262,8 @@ class SalesApp:
                     df_sales = pd.DataFrame(columns=cols_sales)
                     df_sales.to_excel(writer, sheet_name='銷售紀錄', index=False)
                     
-                    # 商品資料表
                     cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"]
                     df_prods = pd.DataFrame(columns=cols_prods)
-                    # 範例資料
                     df_prods.loc[0] = ["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]
                     df_prods.to_excel(writer, sheet_name='商品資料', index=False)
             except Exception as e:
@@ -125,8 +277,6 @@ class SalesApp:
                 df["目前庫存"] = 0 
             else:
                 df["目前庫存"] = df["目前庫存"].fillna(0).astype(int)
-            
-            # [新增] 讀取時自動排序，確保 UI 顯示整齊
             df = df.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
             return df
         except:
@@ -136,48 +286,229 @@ class SalesApp:
         tab_control = ttk.Notebook(self.root)
         self.tab_sales = ttk.Frame(tab_control)
         self.tab_products = ttk.Frame(tab_control)
+        self.tab_backup = ttk.Frame(tab_control) 
         self.tab_about = ttk.Frame(tab_control)
         
-        tab_control.add(self.tab_sales, text='銷售輸入 & 庫存扣除')
-        tab_control.add(self.tab_products, text='商品資料 & 庫存管理')
-        tab_control.add(self.tab_about, text='關於開發者')
+        tab_control.add(self.tab_sales, text='銷售輸入 & 庫存')
+        tab_control.add(self.tab_products, text='商品資料管理')
+        tab_control.add(self.tab_backup, text='☁️ 雲端備份還原') 
+        tab_control.add(self.tab_about, text='設定與關於')
         
         tab_control.pack(expand=1, fill="both")
         
         self.setup_sales_tab()
         self.setup_product_tab()
+        self.setup_backup_tab() 
         self.setup_about_tab()
 
-    # ================= 1. 銷售輸入頁面 =================
+    # ================= 備份還原頁面 =================
+    def setup_backup_tab(self):
+        frame = ttk.Frame(self.tab_backup, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        auth_frame = ttk.LabelFrame(frame, text="1. Google 帳號連結", padding=15)
+        auth_frame.pack(fill="x", pady=10)
+        
+        self.lbl_auth_status = ttk.Label(auth_frame, text="狀態: 尚未連結", foreground="red")
+        self.lbl_auth_status.pack(side="left", padx=10)
+        
+        self.btn_login = ttk.Button(auth_frame, text="登入 Google 帳號", command=self.start_login_thread)
+        self.btn_login.pack(side="right")
+
+        op_frame = ttk.LabelFrame(frame, text="2. 檔案備份與還原 (自動存入「蝦皮進銷存系統_備份」)", padding=15)
+        op_frame.pack(fill="both", expand=True, pady=10)
+
+        up_frame = ttk.Frame(op_frame)
+        up_frame.pack(fill="x", pady=5)
+        ttk.Label(up_frame, text="將目前的 Excel 檔案備份到雲端 (建議每日執行):").pack(side="left")
+        
+        self.btn_upload = ttk.Button(up_frame, text="⬆️ 上傳備份", command=self.start_upload_thread)
+        self.btn_upload.pack(side="right")
+
+        ttk.Separator(op_frame, orient="horizontal").pack(fill="x", pady=15)
+
+        ttk.Label(op_frame, text="3. 歷史備份紀錄 (雙擊項目可還原):").pack(anchor="w")
+        
+        cols = ("檔名", "備份時間")
+        self.tree_backup = ttk.Treeview(op_frame, columns=cols, show='headings', height=10)
+        self.tree_backup.heading("檔名", text="備份檔名")
+        self.tree_backup.column("檔名", width=400)
+        self.tree_backup.heading("備份時間", text="建立時間 (已轉為台灣時間)")
+        self.tree_backup.column("備份時間", width=200)
+        self.tree_backup.pack(fill="both", expand=True, pady=5)
+        
+        self.tree_backup.bind("<Double-1>", self.action_restore_backup)
+
+        self.btn_refresh = ttk.Button(op_frame, text="🔄 重新整理列表", command=self.start_list_thread)
+        self.btn_refresh.pack(fill="x", pady=5)
+
+
+          # === VIP 驗證區塊 ===
+        vip_frame = ttk.LabelFrame(frame, text="🔒 進階功能解鎖", padding=15)
+        vip_frame.pack(fill="x", pady=10)
+
+        # 新增欄位：讓客戶輸入他的帳號
+        ttk.Label(vip_frame, text="授權帳號(Email):").pack(side="left")
+        self.var_vip_user = tk.StringVar()
+        ttk.Entry(vip_frame, textvariable=self.var_vip_user, width=20).pack(side="left", padx=5)
+
+        ttk.Label(vip_frame, text="啟用碼:").pack(side="left")
+        self.var_vip_code = tk.StringVar()
+        ttk.Entry(vip_frame, textvariable=self.var_vip_code, width=15).pack(side="left", padx=5)
+        
+        btn_unlock = ttk.Button(vip_frame, text="解鎖", command=self.unlock_vip_features)
+        btn_unlock.pack(side="left", padx=10)
+        
+        # ... (後面的按鈕預設 disabled 邏輯同上)
+
+    def unlock_vip_features(self):
+        user_id = self.var_vip_user.get().strip()
+        input_code = self.var_vip_code.get().strip().upper()
+        
+        if not user_id or not input_code:
+            messagebox.showwarning("提示", "請輸入授權帳號與啟用碼")
+            return
+
+        # === 核心驗證邏輯 ===
+        # 這裡的 SALT 必須跟您的生成器完全一樣
+        SECRET_SALT = "My_Super_Secret_Salt_Key_2026"
+        
+        # 軟體自己算一次正確答案
+        raw_string = user_id + SECRET_SALT
+        expected_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
+        
+        # 比對客戶輸入的 跟 算出來的 是否一致
+        if input_code == expected_code:
+            self.is_vip = True
+            messagebox.showinfo("成功", "VIP 功能已解鎖！\n請接著進行 Google 帳號登入。")
+            
+            # 解鎖按鈕
+            self.btn_login.config(state="normal")
+            self.lbl_auth_status.config(text="狀態: 尚未連結 (請點擊登入)", foreground="red")
+            if self.drive_manager.is_authenticated:
+                 self.btn_upload.config(state="normal")
+                 
+            # (進階) 這裡可以把 user_id 和 code 存到一個本地文件 config.ini
+            # 下次打開程式自動讀取並驗證，不用每次都輸入
+        else:
+            messagebox.showerror("錯誤", "啟用碼錯誤或是帳號不符！\n請聯繫開發者獲取正確授權。")
+
+    # --- 執行緒相關函數 ---
+    def start_login_thread(self):
+        self.btn_login.config(state="disabled")
+        self.lbl_auth_status.config(text="狀態: 正在開啟瀏覽器...請稍候", foreground="orange")
+        threading.Thread(target=self._run_login, daemon=True).start()
+
+    def _run_login(self):
+        success, msg = self.drive_manager.authenticate()
+        self.root.after(0, lambda: self._login_callback(success, msg))
+
+    def _login_callback(self, success, msg):
+        self.btn_login.config(state="normal")
+        if success:
+            self.lbl_auth_status.config(text=f"狀態: 登入成功", foreground="green")
+            self.start_list_thread() 
+        else:
+            self.lbl_auth_status.config(text=f"狀態: {msg}", foreground="red")
+            messagebox.showerror("登入錯誤", msg)
+
+    def start_upload_thread(self):
+        if not self.drive_manager.is_authenticated:
+            messagebox.showwarning("警告", "請先登入 Google 帳號！")
+            return
+        if not os.path.exists(FILE_NAME):
+            messagebox.showerror("錯誤", "找不到 Excel 檔案！")
+            return
+            
+        self.btn_upload.config(state="disabled", text="上傳中...")
+        threading.Thread(target=self._run_upload, daemon=True).start()
+
+    def _run_upload(self):
+        success, msg = self.drive_manager.upload_file(FILE_NAME)
+        self.root.after(0, lambda: self._upload_callback(success, msg))
+
+    def _upload_callback(self, success, msg):
+        self.btn_upload.config(state="normal", text="⬆️ 上傳備份")
+        if success:
+            messagebox.showinfo("成功", msg)
+            self.start_list_thread()
+        else:
+            messagebox.showerror("失敗", msg)
+
+    def start_list_thread(self):
+        if not self.drive_manager.is_authenticated: return
+        self.btn_refresh.config(state="disabled", text="讀取中...")
+        threading.Thread(target=self._run_list, daemon=True).start()
+
+    def _run_list(self):
+        files = self.drive_manager.list_backups()
+        self.root.after(0, lambda: self._list_callback(files))
+
+    def _list_callback(self, files):
+        self.btn_refresh.config(state="normal", text="🔄 重新整理列表")
+        for item in self.tree_backup.get_children():
+            self.tree_backup.delete(item)
+            
+        if not files: return
+
+        for f in files:
+            raw_time = f.get('createdTime', '')
+            try:
+                # 1. 讀取 Google 回傳的 UTC 時間
+                dt = datetime.strptime(raw_time, "%Y-%m-%dT%H:%M:%S.%fZ")
+                # 2. 自動加 8 小時 (修正為台灣時間)
+                dt = dt + timedelta(hours=8)
+                nice_time = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                nice_time = raw_time
+            
+            self.tree_backup.insert("", "end", values=(f['name'], nice_time), tags=(f['id'],))
+
+    def action_restore_backup(self, event):
+        item_id = self.tree_backup.selection()
+        if not item_id: return
+        
+        item = self.tree_backup.item(item_id)
+        file_name = item['values'][0]
+        file_id = self.tree_backup.item(item_id, "tags")[0]
+
+        confirm = messagebox.askyesno("⚠️ 危險操作：確認還原？", 
+                                      f"您確定要將資料還原成：\n{file_name}\n\n注意：這將會「覆蓋」目前電腦上所有的銷售與庫存紀錄！")
+        if confirm:
+            success, msg = self.drive_manager.download_file(file_id, FILE_NAME)
+            if success:
+                messagebox.showinfo("還原完成", msg)
+                self.products_df = self.load_products()
+                self.update_sales_prod_list()
+                self.update_mgmt_prod_list()
+            else:
+                messagebox.showerror("還原失敗", msg)
+
+    # ================= 銷售輸入頁面 (不變) =================
     def setup_sales_tab(self):
-        # Top: Info
         top_frame = ttk.LabelFrame(self.tab_sales, text="訂單基本資料", padding=10)
         top_frame.pack(fill="x", padx=10, pady=5)
 
-        # 第一排：日期、啟用開關
         r1 = ttk.Frame(top_frame)
         r1.pack(fill="x", pady=2)
         ttk.Label(r1, text="訂單日期:").pack(side="left")
         ttk.Entry(r1, textvariable=self.var_date, width=12).pack(side="left", padx=5)
         
-        chk = ttk.Checkbutton(r1, text="填寫訂單來源與顧客資料", variable=self.var_enable_cust, command=self.toggle_cust_info)
+        chk = ttk.Checkbutton(r1, text="填寫來源與顧客", variable=self.var_enable_cust, command=self.toggle_cust_info)
         chk.pack(side="left", padx=20)
 
-        # 第二排：平台、買家 (使用 Grid 排版比較整齊)
         self.cust_frame = ttk.Frame(top_frame)
         self.cust_frame.pack(fill="x", pady=5)
         
-        # 交易平台輸入
         ttk.Label(self.cust_frame, text="交易平台:").grid(row=0, column=0, sticky="w", padx=2)
         self.combo_platform = ttk.Combobox(self.cust_frame, textvariable=self.var_platform, values=PLATFORM_OPTIONS, state="readonly", width=14)
         self.combo_platform.grid(row=0, column=1, padx=5)
-        self.combo_platform.set("蝦皮購物") # 預設值
+        self.combo_platform.set("蝦皮購物")
 
         ttk.Label(self.cust_frame, text="買家名稱(ID):").grid(row=0, column=2, sticky="w", padx=10)
         self.entry_cust_name = ttk.Entry(self.cust_frame, textvariable=self.var_cust_name, width=15)
         self.entry_cust_name.grid(row=0, column=3, padx=5)
 
-        # 第三排：物流、地點
         ttk.Label(self.cust_frame, text="物流方式:").grid(row=1, column=0, sticky="w", padx=2, pady=5)
         self.combo_ship = ttk.Combobox(self.cust_frame, textvariable=self.var_ship_method, values=SHIPPING_METHODS, state="readonly", width=14)
         self.combo_ship.grid(row=1, column=1, padx=5, pady=5)
@@ -190,15 +521,13 @@ class SalesApp:
 
         self.toggle_cust_info()
 
-        # Middle: Split View
         paned = ttk.PanedWindow(self.tab_sales, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Left: Product Select
-        left_frame = ttk.LabelFrame(paned, text="加入商品 (即時庫存查詢)", padding=10)
+        left_frame = ttk.LabelFrame(paned, text="加入商品", padding=10)
         paned.add(left_frame, weight=1)
 
-        ttk.Label(left_frame, text="搜尋商品:").pack(anchor="w")
+        ttk.Label(left_frame, text="搜尋:").pack(anchor="w")
         entry_search = ttk.Entry(left_frame, textvariable=self.var_search)
         entry_search.pack(fill="x", pady=5)
         entry_search.bind('<KeyRelease>', self.update_sales_prod_list)
@@ -214,35 +543,30 @@ class SalesApp:
         
         self.update_sales_prod_list()
 
-        # Details
         detail_frame = ttk.Frame(left_frame)
         detail_frame.pack(fill="x", pady=5)
         
         grid_opts = {'sticky': 'w', 'padx': 2, 'pady': 2}
-        ttk.Label(detail_frame, text="已選商品:").grid(row=0, column=0, **grid_opts)
+        ttk.Label(detail_frame, text="已選:").grid(row=0, column=0, **grid_opts)
         ttk.Entry(detail_frame, textvariable=self.var_sel_name, state='readonly').grid(row=0, column=1, sticky="ew")
         
-        # 顯示庫存量
-        ttk.Label(detail_frame, text="目前庫存:").grid(row=1, column=0, **grid_opts)
-        lbl_stock = ttk.Label(detail_frame, textvariable=self.var_sel_stock_info, foreground="blue", font=("bold", 10))
+        ttk.Label(detail_frame, text="庫存:").grid(row=1, column=0, **grid_opts)
+        lbl_stock = ttk.Label(detail_frame, textvariable=self.var_sel_stock_info, foreground="blue")
         lbl_stock.grid(row=1, column=1, sticky="w", padx=2)
 
-        ttk.Label(detail_frame, text="售價(單):").grid(row=2, column=0, **grid_opts)
+        ttk.Label(detail_frame, text="售價:").grid(row=2, column=0, **grid_opts)
         ttk.Entry(detail_frame, textvariable=self.var_sel_price).grid(row=2, column=1, sticky="ew")
 
-        ttk.Label(detail_frame, text="購買數量:").grid(row=3, column=0, **grid_opts)
+        ttk.Label(detail_frame, text="數量:").grid(row=3, column=0, **grid_opts)
         ttk.Entry(detail_frame, textvariable=self.var_sel_qty).grid(row=3, column=1, sticky="ew")
 
-
-        ttk.Label(detail_frame, text="成本(單):").grid(row=4, column=0, **grid_opts)
+        ttk.Label(detail_frame, text="成本:").grid(row=4, column=0, **grid_opts)
         ttk.Entry(detail_frame, textvariable=self.var_sel_cost).grid(row=4, column=1, sticky="ew")
 
         ttk.Button(detail_frame, text="加入清單 ->", command=self.add_to_cart).grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
 
-        # Right: Cart
-        right_frame = ttk.LabelFrame(paned, text="訂單內容 (送出後自動扣庫存)", padding=10)
+        right_frame = ttk.LabelFrame(paned, text="訂單內容", padding=10)
         paned.add(right_frame, weight=2)
-
 
         cols = ("商品名稱", "數量", "單價", "總計")
         self.tree = ttk.Treeview(right_frame, columns=cols, show='headings', height=8)
@@ -256,26 +580,25 @@ class SalesApp:
         self.tree.column("總計", width=70, anchor="e")
         self.tree.pack(fill="both", expand=True)
 
-        ttk.Button(right_frame, text="(x) 移除選中項目", command=self.remove_from_cart).pack(anchor="e", pady=2)
+        ttk.Button(right_frame, text="(x) 移除", command=self.remove_from_cart).pack(anchor="e", pady=2)
 
-        # === 費用設定 ===
-        fee_frame = ttk.LabelFrame(right_frame, text="手續費與其他扣款 (2026新制)", padding=10)
+        fee_frame = ttk.LabelFrame(right_frame, text="費用與折扣", padding=10)
         fee_frame.pack(fill="x", pady=5)
         
         f1 = ttk.Frame(fee_frame)
         f1.pack(fill="x")
-        ttk.Label(f1, text="平台手續費率:").pack(side="left")
+        ttk.Label(f1, text="費率:").pack(side="left")
         
         self.combo_fee_rate = ttk.Combobox(f1, textvariable=self.var_fee_rate_str, values=SHOPEE_FEE_OPTIONS, width=28)
         self.combo_fee_rate.pack(side="left", padx=5)
-        self.combo_fee_rate.set("一般賣家-平日 (14.5%)") # 預設值
+        self.combo_fee_rate.set("一般賣家-平日 (14.5%)") 
         self.combo_fee_rate.bind('<<ComboboxSelected>>', self.on_fee_option_selected)
         self.combo_fee_rate.bind('<KeyRelease>', self.update_totals_event)
         
         f2 = ttk.Frame(fee_frame)
         f2.pack(fill="x", pady=5)
         
-        tag_opts = ["", "活動費", "運費補貼", "補償金額", "私人預定", "補寄補貼", "固定成本(如包材/出貨)"]
+        tag_opts = ["", "活動費", "運費補貼", "補償金額", "私人預定", "補寄補貼", "固定成本"]
         self.combo_tag = ttk.Combobox(f2, textvariable=self.var_fee_tag, values=tag_opts, state="readonly", width=12)
         self.combo_tag.pack(side="left")
         self.combo_tag.set("扣費原因")
@@ -285,56 +608,47 @@ class SalesApp:
         e_extra.pack(side="left")
         e_extra.bind('<KeyRelease>', self.update_totals_event)
         
-        ttk.Label(f2, text="(如:負擔運費60)", foreground="gray", font=("微軟正黑體", 8)).pack(side="left", padx=2)
-
-        # Summary
         sum_frame = ttk.Frame(right_frame, relief="groove", padding=5)
         sum_frame.pack(fill="x", side="bottom")
         
-        self.lbl_gross = ttk.Label(sum_frame, text="總金額: $0",font=("bold", 11))
+        self.lbl_gross = ttk.Label(sum_frame, text="總金額: $0")
         self.lbl_gross.pack(anchor="w")
-        self.lbl_fee = ttk.Label(sum_frame, text="扣費: $0", foreground="blue", font=("bold", 11))
+        self.lbl_fee = ttk.Label(sum_frame, text="扣費: $0", foreground="blue")
         self.lbl_fee.pack(anchor="w")
-        self.lbl_profit = ttk.Label(sum_frame, text="實收淨利: $0", foreground="green", font=("bold", 12))
+        self.lbl_profit = ttk.Label(sum_frame, text="實收淨利: $0", foreground="green")
         self.lbl_profit.pack(anchor="w")
-        self.lbl_income = ttk.Label(sum_frame, text="預估入帳: $0", foreground="#ff0800", font=("bold", 12))
+        self.lbl_income = ttk.Label(sum_frame, text="預估入帳: $0", foreground="#ff0800")
         self.lbl_income.pack(anchor="w")
 
+        ttk.Button(sum_frame, text="✔ 送出訂單", command=self.submit_order).pack(fill="x", pady=5)
 
-        ttk.Button(sum_frame, text="✔ 確認送出並寫入 Excel", command=self.submit_order).pack(fill="x", pady=5)
-
-
-    # ================= 2. 商品管理頁面 =================
     def setup_product_tab(self):
         paned = ttk.PanedWindow(self.tab_products, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # === 左側：新增商品 ===
-        frame_add = ttk.LabelFrame(paned, text="【新增】新商品入庫", padding=15)
+        frame_add = ttk.LabelFrame(paned, text="新增商品", padding=15)
         paned.add(frame_add, weight=1)
 
-        ttk.Label(frame_add, text="1. 選擇或輸入分類Tag:", font=("bold", 10)).pack(anchor="w", pady=(0,5))
+        ttk.Label(frame_add, text="1. 分類Tag:").pack(anchor="w", pady=(0,5))
         self.combo_add_tag = ttk.Combobox(frame_add, textvariable=self.var_add_tag)
         self.combo_add_tag.pack(fill="x", pady=5)
         self.combo_add_tag.bind('<Button-1>', self.load_existing_tags)
 
-        ttk.Label(frame_add, text="2. 商品名稱:", font=("bold", 10)).pack(anchor="w", pady=(10,5))
+        ttk.Label(frame_add, text="2. 商品名稱:").pack(anchor="w", pady=(10,5))
         ttk.Entry(frame_add, textvariable=self.var_add_name).pack(fill="x", pady=5)
 
-        ttk.Label(frame_add, text="3. 進貨成本:", font=("bold", 10)).pack(anchor="w", pady=(10,5))
+        ttk.Label(frame_add, text="3. 進貨成本:").pack(anchor="w", pady=(10,5))
         ttk.Entry(frame_add, textvariable=self.var_add_cost).pack(fill="x", pady=5)
         
-        # [新增] 初始庫存
-        ttk.Label(frame_add, text="4. 初始庫存數量:", font=("bold", 10)).pack(anchor="w", pady=(10,5))
+        ttk.Label(frame_add, text="4. 初始庫存:").pack(anchor="w", pady=(10,5))
         ttk.Entry(frame_add, textvariable=self.var_add_stock).pack(fill="x", pady=5)
 
-        ttk.Button(frame_add, text="+ 新增至資料庫", command=self.submit_new_product).pack(fill="x", pady=20)
+        ttk.Button(frame_add, text="+ 新增", command=self.submit_new_product).pack(fill="x", pady=20)
 
-        # === 右側：更新商品 ===
-        frame_upd = ttk.LabelFrame(paned, text="【更新】維護既有商品 (含補貨)", padding=15)
+        frame_upd = ttk.LabelFrame(paned, text="更新商品", padding=15)
         paned.add(frame_upd, weight=1)
 
-        ttk.Label(frame_upd, text="搜尋商品關鍵字:", font=("bold", 10)).pack(anchor="w")
+        ttk.Label(frame_upd, text="搜尋關鍵字:").pack(anchor="w")
         e_search = ttk.Entry(frame_upd, textvariable=self.var_mgmt_search)
         e_search.pack(fill="x", pady=5)
         e_search.bind('<KeyRelease>', self.update_mgmt_prod_list)
@@ -351,7 +665,7 @@ class SalesApp:
         edit_frame = ttk.LabelFrame(frame_upd, text="編輯選中商品", padding=10)
         edit_frame.pack(fill="x", pady=10)
 
-        ttk.Label(edit_frame, text="商品名稱 (不可改):").grid(row=0, column=0, sticky="w")
+        ttk.Label(edit_frame, text="名稱 (不可改):").grid(row=0, column=0, sticky="w")
         ttk.Entry(edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
 
         ttk.Label(edit_frame, text="分類Tag:").grid(row=1, column=0, sticky="w", pady=5)
@@ -359,40 +673,48 @@ class SalesApp:
         self.combo_upd_tag.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
         self.combo_upd_tag.bind('<Button-1>', self.load_existing_tags)
 
-        ttk.Label(edit_frame, text="成本調整:").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(edit_frame, text="成本:").grid(row=2, column=0, sticky="w", pady=5)
         ttk.Entry(edit_frame, textvariable=self.var_upd_cost).grid(row=2, column=1, sticky="ew", padx=5, pady=5)
         
-        # [新增] 修改庫存
-        ttk.Label(edit_frame, text="目前庫存(補貨):").grid(row=3, column=0, sticky="w", pady=5)
+        ttk.Label(edit_frame, text="庫存(補貨):").grid(row=3, column=0, sticky="w", pady=5)
         ttk.Entry(edit_frame, textvariable=self.var_upd_stock).grid(row=3, column=1, sticky="ew", padx=5, pady=5)
 
-        ttk.Label(edit_frame, text="上次更新:").grid(row=4, column=0, sticky="w")
+        ttk.Label(edit_frame, text="更新時間:").grid(row=4, column=0, sticky="w")
         ttk.Label(edit_frame, textvariable=self.var_upd_time, foreground="gray").grid(row=4, column=1, sticky="w", padx=5)
 
         btn_frame = ttk.Frame(edit_frame)
         btn_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
         
-        ttk.Button(btn_frame, text="💾 儲存變更", command=self.submit_update_product).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ttk.Button(btn_frame, text="🗑️ 刪除商品", command=self.delete_product).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        ttk.Button(btn_frame, text="💾 儲存", command=self.submit_update_product).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ttk.Button(btn_frame, text="🗑️ 刪除", command=self.delete_product).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
         self.update_mgmt_prod_list()
 
-    # ================= 3. 關於開發者頁面 =================
     def setup_about_tab(self):
         frame = ttk.Frame(self.tab_about, padding=40)
         frame.pack(expand=True, fill="both")
+
+        font_frame = ttk.LabelFrame(frame, text="介面顯示設定 (字體放大)", padding=15)
+        font_frame.pack(fill="x", pady=10)
+        
+        ttk.Label(font_frame, text="調整字型大小 (10-20):").pack(side="left", padx=5)
+        spin = ttk.Spinbox(font_frame, from_=10, to=20, textvariable=self.var_font_size, width=5, command=self.change_font_size)
+        spin.pack(side="left", padx=5)
+        spin.bind('<KeyRelease>', self.change_font_size)
+        
+        ttk.Label(font_frame, text="(調整後表格行高會自動變更)", foreground="gray").pack(side="left", padx=10)
+
+
         ttk.Label(frame, text="關於本軟體", font=("微軟正黑體", 20, "bold")).pack(pady=10)
-        intro_text = "本系統專為個人賣家設計，整合進銷存管理與蝦皮費用試算功能。"
+        intro_text = "本系統專為個人賣家設計，整合進銷存管理與蝦皮費用試算。\n\n[新增功能]\n1. Google 雲端備份 (多執行緒不卡頓)\n2. 自動建立專屬備份資料夾\n3. 字體大小調整 (長輩友善)\n4. 備份時間自動修正為台灣時間"
         ttk.Label(frame, text=intro_text, font=("微軟正黑體", 12), justify="center").pack(pady=20)
-        contact_frame = ttk.LabelFrame(frame, text="聯絡開發者", padding=20)
+        
+        contact_frame = ttk.LabelFrame(frame, text="聯絡資訊", padding=20)
         contact_frame.pack(fill="x", padx=50, pady=10)
         ttk.Label(contact_frame, text="程式設計者: redmaple", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
         ttk.Label(contact_frame, text="聯絡信箱: az062596216@gmail.com", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
-        license_frame = ttk.LabelFrame(frame, text="使用與授權聲明", padding=20)
-        license_frame.pack(fill="x", padx=50, pady=10)
-        license_text = "● 本軟體以開源 (Open Source) 精神發布，永久免費供個人使用。\n● 軟體按「現狀」提供，請務必定期備份 Excel 檔案。 \n● 開發者不對使用本軟體所產生的任何直接或間接損失負責。\n● 未經授權禁止商業販售本軟體。"
-        ttk.Label(license_frame, text=license_text, font=("微軟正黑體", 10), foreground="#555", justify="left").pack(anchor="w")
-        ttk.Label(frame, text="Version 3.2 (Product Sorting)", foreground="gray").pack(side="bottom", pady=20)
+        
+        ttk.Label(frame, text="Version 3.6 (Timezone Fix)", foreground="gray").pack(side="bottom", pady=20)
 
     # ---------------- 邏輯功能區 ----------------
 
@@ -428,10 +750,8 @@ class SalesApp:
             for index, row in self.products_df.iterrows():
                 p_name = str(row['商品名稱'])
                 p_tag = str(row['分類Tag']) if pd.notna(row['分類Tag']) else "無"
-                try:
-                    p_stock = int(row['目前庫存'])
-                except:
-                    p_stock = 0
+                try: p_stock = int(row['目前庫存'])
+                except: p_stock = 0
                 display_str = f"[{p_tag}] {p_name} (庫存: {p_stock})"
                 
                 if search_term in p_name.lower() or search_term in p_tag.lower():
@@ -453,10 +773,8 @@ class SalesApp:
             record = self.products_df[self.products_df['商品名稱'] == selected_name]
             if not record.empty:
                 self.var_sel_cost.set(record.iloc[0]['預設成本'])
-                try:
-                    stock = int(record.iloc[0]['目前庫存'])
-                except:
-                    stock = 0
+                try: stock = int(record.iloc[0]['目前庫存'])
+                except: stock = 0
                 self.var_sel_stock_info.set(str(stock)) 
                 self.var_sel_price.set(0)
 
@@ -470,7 +788,6 @@ class SalesApp:
             
             if qty <= 0: return
 
-            # 檢查庫存
             current_stock = 0
             record = self.products_df[self.products_df['商品名稱'] == name]
             if not record.empty:
@@ -544,11 +861,9 @@ class SalesApp:
             return t_sales, fee
         except: return 0, 0
 
-    # 【核心功能】 送出訂單：包含資料留白、平台欄位、庫存修正、毛利、**商品排序**
     def submit_order(self):
         if not self.cart_data: return
         
-        # 取得表單資料
         cust_name = self.var_cust_name.get() if self.var_enable_cust.get() else ""
         cust_loc = self.var_cust_loc.get() if self.var_enable_cust.get() else ""
         ship_method = self.var_ship_method.get() if self.var_enable_cust.get() else ""
@@ -556,23 +871,19 @@ class SalesApp:
         
         t_sales, t_fee = self.update_totals()
         fee_tag = self.var_fee_tag.get()
-        extra_val = 0
         try: extra_val = float(self.var_extra_fee.get())
-        except: pass
+        except: extra_val = 0
         if extra_val > 0 and not fee_tag: fee_tag = "其他"
         elif extra_val == 0: fee_tag = ""
 
         try:
-            # 1. 準備寫入銷售紀錄
             rows = []
             date_str = self.var_date.get()
             out_of_stock_warnings = [] 
 
-            # 讀取最新的商品資料
             df_prods_current = pd.read_excel(FILE_NAME, sheet_name='商品資料')
 
             for i, item in enumerate(self.cart_data):
-                # 資料留白邏輯 (第一筆顯示，其餘留白)
                 if i == 0:
                     row_date = date_str
                     row_platform = platform_name 
@@ -586,12 +897,10 @@ class SalesApp:
                     row_ship = ""
                     row_loc = ""
 
-                # 費用分攤計算
                 ratio = item['total_sales'] / t_sales if t_sales > 0 else 0
                 alloc_fee = t_fee * ratio
                 net = item['total_sales'] - item['total_cost'] - alloc_fee
                 
-                # 計算毛利率
                 margin_pct = 0.0
                 if item['total_sales'] > 0:
                     margin_pct = (net / item['total_sales']) * 100
@@ -614,29 +923,22 @@ class SalesApp:
                     "毛利率": f"{margin_pct:.1f}%"
                 })
 
-                # --- 庫存扣除邏輯 (含 Bug 修正) ---
                 prod_name = item['name']
                 sold_qty = item['qty']
                 
                 idxs = df_prods_current[df_prods_current['商品名稱'] == prod_name].index
-                
                 if not idxs.empty:
                     target_idx = idxs[0]
                     raw_stock = df_prods_current.at[target_idx, '目前庫存']
-                    try:
-                        current = int(raw_stock)
-                    except (ValueError, TypeError):
-                        current = 0
+                    try: current = int(raw_stock)
+                    except: current = 0
                         
                     new_stock = current - sold_qty
                     df_prods_current.at[target_idx, '目前庫存'] = new_stock
-                    
                     if new_stock <= 0:
                         out_of_stock_warnings.append(f"● {prod_name} (剩餘: {new_stock})")
 
-            # 3. 寫入 Excel
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                # 【新增】寫入商品表前，依分類+名稱排序
                 df_prods_current = df_prods_current.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
                 df_prods_current.to_excel(writer, sheet_name='商品資料', index=False)
 
@@ -651,19 +953,16 @@ class SalesApp:
                     header = True
                 df_sales_new.to_excel(writer, sheet_name='銷售紀錄', index=False, header=header, startrow=start_row)
 
-            # 4. 更新記憶體
             self.products_df = df_prods_current
             self.update_sales_prod_list()
             self.update_mgmt_prod_list()
 
-            # 5. 結果通知
             msg = "訂單已儲存！庫存已更新。"
             if out_of_stock_warnings:
                 msg += "\n\n⚠️ 注意！以下商品已售完或庫存不足：\n" + "\n".join(out_of_stock_warnings)
             
             messagebox.showinfo("成功", msg)
 
-            # Reset
             self.cart_data = []
             for i in self.tree.get_children(): self.tree.delete(i)
             self.update_totals()
@@ -682,10 +981,8 @@ class SalesApp:
             for index, row in self.products_df.iterrows():
                 p_name = str(row['商品名稱'])
                 p_tag = str(row['分類Tag']) if pd.notna(row['分類Tag']) else "無"
-                
                 try: p_stock = int(row['目前庫存'])
                 except: p_stock = 0
-                
                 display_str = f"[{p_tag}] {p_name} (庫存: {p_stock})"
                 
                 if search_term in p_name.lower() or search_term in p_tag.lower():
@@ -707,12 +1004,8 @@ class SalesApp:
                 self.var_upd_name.set(row['商品名稱'])
                 self.var_upd_tag.set(row['分類Tag'] if pd.notna(row['分類Tag']) else "")
                 self.var_upd_cost.set(row['預設成本'])
-                
-                try:
-                    current_stock = int(row['目前庫存'])
-                except (ValueError, TypeError):
-                    current_stock = 0
-                    
+                try: current_stock = int(row['目前庫存'])
+                except: current_stock = 0
                 self.var_upd_stock.set(current_stock)
                 self.var_upd_time.set(row['最後更新時間'] if pd.notna(row['最後更新時間']) else "未知")
 
@@ -733,8 +1026,6 @@ class SalesApp:
             new_row = pd.DataFrame([{"分類Tag": tag, "商品名稱": name, "預設成本": cost, "目前庫存": stock, "最後更新時間": now_str}])
             df_old = pd.read_excel(FILE_NAME, sheet_name='商品資料')
             df_updated = pd.concat([df_old, new_row], ignore_index=True)
-            
-            # 【新增】排序
             df_updated = df_updated.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
 
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
@@ -764,8 +1055,6 @@ class SalesApp:
                 df_old.loc[idx, '預設成本'] = new_cost
                 df_old.loc[idx, '目前庫存'] = new_stock 
                 df_old.loc[idx, '最後更新時間'] = now_str
-                
-                # 【新增】排序
                 df_old = df_old.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
 
                 with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
@@ -798,6 +1087,9 @@ class SalesApp:
             messagebox.showinfo("成功", f"已刪除商品：{name}")
         except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
 
+
+    
+
 if __name__ == "__main__":
     root = tk.Tk()
     style = ttk.Style()
@@ -807,4 +1099,3 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
-
