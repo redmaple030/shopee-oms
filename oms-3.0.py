@@ -1,5 +1,7 @@
-#shopee-oms 3.2 測試版
+#shopee-oms 3.4 完整版
 
+import json
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, font
 import pandas as pd
@@ -9,6 +11,28 @@ import re
 import pickle
 import threading 
 import hashlib
+
+
+# 1. 匯入敏感資料
+try:
+    from secrets_config import SECRET_SALT
+except ImportError:
+    # 這是為了防止別人下載原始碼後報錯，給一個假的值
+    SECRET_SALT = "DEMO_SALT_FOR_OPENSOURCE"
+
+
+# 2. 加入這段函式：用來處理打包後的資源路徑
+def resource_path(relative_path):
+    """ 獲取資源的絕對路徑，兼容 Dev 和 PyInstaller """
+    try:
+        # PyInstaller 創建臨時文件夾，路徑存儲在 _MEIPASS 中
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+    
+
 
 # --- Google Drive 相關套件 ---
 try:
@@ -22,7 +46,7 @@ except ImportError:
 
 # 設定 Excel 檔案名稱
 FILE_NAME = 'sales_data.xlsx'
-CREDENTIALS_FILE = 'credentials.json' 
+CREDENTIALS_FILE = resource_path('credentials.json')  
 TOKEN_FILE = 'token.json'             
 SCOPES = ['https://www.googleapis.com/auth/drive.file'] 
 
@@ -35,6 +59,7 @@ TAIWAN_CITIES = [
     "高雄市", "屏東縣", "宜蘭縣", "花蓮縣", "臺東縣", "澎湖縣", "金門縣", "連江縣",
     "海外", "面交"
 ]
+
 
 PLATFORM_OPTIONS = [
     "蝦皮購物", "賣貨便(7-11)", "好賣家(全家)", "旋轉拍賣", 
@@ -58,6 +83,7 @@ SHOPEE_FEE_OPTIONS = [
     "商城-較長備貨-平日 (20.0%)",
     "商城-較長備貨-促銷 (23.9%)"
 ]
+
 
 class GoogleDriveSync:
     """處理 Google Drive 認證、資料夾管理、上傳與下載邏輯"""
@@ -225,6 +251,9 @@ class SalesApp:
         self.products_df = self.load_products()
         self.is_vip = False # 預設不是 VIP
         self.create_tabs()
+         # 啟動時自動檢查授權
+        self.check_license_on_startup()
+
     
    
 
@@ -247,8 +276,7 @@ class SalesApp:
         except:
             pass
 
-    
-    
+
 
     def check_excel_file(self):
         if not os.path.exists(FILE_NAME):
@@ -285,36 +313,231 @@ class SalesApp:
     def create_tabs(self):
         tab_control = ttk.Notebook(self.root)
         self.tab_sales = ttk.Frame(tab_control)
+        self.tab_sales_edit = ttk.Frame(tab_control) 
         self.tab_products = ttk.Frame(tab_control)
+        self.tab_analysis = ttk.Frame(tab_control)
         self.tab_backup = ttk.Frame(tab_control) 
         self.tab_about = ttk.Frame(tab_control)
         
         tab_control.add(self.tab_sales, text='銷售輸入 & 庫存')
+        tab_control.add(self.tab_sales_edit, text='銷售紀錄修改') 
         tab_control.add(self.tab_products, text='商品資料管理')
-        tab_control.add(self.tab_backup, text='☁️ 雲端備份還原') 
+        tab_control.add(self.tab_analysis, text='營收與商品分析')
+        tab_control.add(self.tab_backup, text='雲端備份還原') 
         tab_control.add(self.tab_about, text='設定與關於')
         
         tab_control.pack(expand=1, fill="both")
         
         self.setup_sales_tab()
+        self.setup_sales_edit_tab()
         self.setup_product_tab()
+        self.setup_analysis_tab()
         self.setup_backup_tab() 
         self.setup_about_tab()
+
+
+
+    # ================= 營收與商品分析 (新功能) =================
+    def setup_analysis_tab(self):
+        # 主框架：左右分割
+        paned = ttk.PanedWindow(self.tab_analysis, orient=tk.HORIZONTAL)
+        paned.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # --- 左側：時間維度收益分析 ---
+        left_frame = ttk.LabelFrame(paned, text="📅 週期收益報表 (月/週/日)", padding=10)
+        paned.add(left_frame, weight=1)
+
+        # 1. 摘要看板 (Summary)
+        summary_frame = ttk.Frame(left_frame, relief="groove", borderwidth=2)
+        summary_frame.pack(fill="x", pady=(0, 10))
+        
+        self.lbl_month_sales = ttk.Label(summary_frame, text="本月營收: $0", font=("微軟正黑體", 12, "bold"), foreground="blue")
+        self.lbl_month_sales.pack(anchor="w", padx=5, pady=2)
+        self.lbl_month_profit = ttk.Label(summary_frame, text="本月淨利: $0", font=("微軟正黑體", 12, "bold"), foreground="green")
+        self.lbl_month_profit.pack(anchor="w", padx=5, pady=2)
+
+        # 2. 詳細列表 (Treeview)
+        cols_time = ("時間區間", "總營收", "總淨利", "訂單數")
+        self.tree_time_stats = ttk.Treeview(left_frame, columns=cols_time, show='headings', height=15)
+        
+        self.tree_time_stats.heading("時間區間", text="時間區間 (月/日)")
+        self.tree_time_stats.column("時間區間", width=120)
+        self.tree_time_stats.heading("總營收", text="總營收")
+        self.tree_time_stats.column("總營收", width=80, anchor="e")
+        self.tree_time_stats.heading("總淨利", text="總淨利")
+        self.tree_time_stats.column("總淨利", width=80, anchor="e")
+        self.tree_time_stats.heading("訂單數", text="單數")
+        self.tree_time_stats.column("訂單數", width=50, anchor="center")
+        
+        self.tree_time_stats.pack(fill="both", expand=True)
+
+        # --- 右側：商品利潤排行 ---
+        right_frame = ttk.LabelFrame(paned, text="🏆 商品銷售排行榜 (依毛利率排序)", padding=10)
+        paned.add(right_frame, weight=1)
+
+        cols_prod = ("商品名稱", "平均毛利%", "總獲利", "總銷量")
+        self.tree_prod_stats = ttk.Treeview(right_frame, columns=cols_prod, show='headings', height=15)
+        
+        self.tree_prod_stats.heading("商品名稱", text="商品名稱")
+        self.tree_prod_stats.column("商品名稱", width=150)
+        self.tree_prod_stats.heading("平均毛利%", text="平均毛利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "平均毛利%", False))
+        self.tree_prod_stats.column("平均毛利%", width=80, anchor="e")
+        self.tree_prod_stats.heading("總獲利", text="總獲利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "總獲利", False))
+        self.tree_prod_stats.column("總獲利", width=80, anchor="e")
+        self.tree_prod_stats.heading("總銷量", text="總銷量", command=lambda: self.sort_tree_column(self.tree_prod_stats, "總銷量", False))
+        self.tree_prod_stats.column("總銷量", width=60, anchor="center")
+
+        sb = ttk.Scrollbar(right_frame, orient="vertical", command=self.tree_prod_stats.yview)
+        self.tree_prod_stats.configure(yscrollcommand=sb.set)
+        self.tree_prod_stats.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # 底部：重新整理按鈕
+        btn_refresh = ttk.Button(self.tab_analysis, text="🔄 重新計算分析數據", command=self.calculate_analysis_data)
+        btn_refresh.pack(fill="x", pady=10, padx=10)
+
+        # 初始載入
+        self.calculate_analysis_data()
+
+    def calculate_analysis_data(self):
+        """核心分析邏輯：讀取 Excel 並運算 (修正版)"""
+        
+        # 1. 安全檢查：確保介面元件已建立
+        if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'):
+            return
+
+        # 2. 清空介面 (清除舊資料)
+        for i in self.tree_time_stats.get_children(): self.tree_time_stats.delete(i)
+        for i in self.tree_prod_stats.get_children(): self.tree_prod_stats.delete(i)
+        
+        # 3. 檢查檔案是否存在
+        if not os.path.exists(FILE_NAME): return
+
+        try:
+            # 4. 讀取 Excel
+            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+            if df.empty: return
+
+            # === 資料清洗與型別轉換 ===
+            # 確保金額是數字 (轉為 float，錯誤則填 0)
+            numeric_cols = ['總銷售額', '總淨利', '數量']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            # 處理日期
+            df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+            df = df.dropna(subset=['日期']) # 移除沒有日期的資料
+
+            # 處理毛利率 (移除 % 並轉數字)
+            if '毛利率' in df.columns:
+                if df['毛利率'].dtype == object:
+                    df['毛利率_數值'] = df['毛利率'].astype(str).str.replace('%', '', regex=False)
+                    df['毛利率_數值'] = pd.to_numeric(df['毛利率_數值'], errors='coerce')
+                else:
+                    df['毛利率_數值'] = df['毛利率']
+            else:
+                df['毛利率_數值'] = 0.0
+
+            # === 左側：時間分析 (月報表) ===
+            df['月份'] = df['日期'].dt.strftime('%Y-%m')
+            
+            # 依月份統計
+            monthly_group = df.groupby('月份')[['總銷售額', '總淨利', '數量']].sum().reset_index()
+            monthly_group = monthly_group.sort_values('月份', ascending=False) # 最近月份在上面
+
+            # 更新看板數據
+            if not monthly_group.empty:
+                latest = monthly_group.iloc[0]
+                self.lbl_month_sales.config(text=f"本月({latest['月份']}) 營收: ${latest['總銷售額']:,.0f}")
+                self.lbl_month_profit.config(text=f"本月({latest['月份']}) 淨利: ${latest['總淨利']:,.0f}")
+            
+            # 填入 Treeview (月資料)
+            for _, row in monthly_group.iterrows():
+                self.tree_time_stats.insert("", "end", values=(
+                    f"{row['月份']} (月)", 
+                    f"${row['總銷售額']:,.0f}", 
+                    f"${row['總淨利']:,.0f}", 
+                    int(row['數量'])
+                ))
+
+            # 插入分隔線
+            self.tree_time_stats.insert("", "end", values=("--- 近7日明細 ---", "", "", ""))
+
+            # === 左側：近7日明細 ===
+            df['日期字串'] = df['日期'].dt.strftime('%Y-%m-%d')
+            daily_group = df.groupby('日期字串')[['總銷售額', '總淨利']].sum().reset_index()
+            daily_group = daily_group.sort_values('日期字串', ascending=False).head(7) # 只取前7天
+
+            for _, row in daily_group.iterrows():
+                self.tree_time_stats.insert("", "end", values=(
+                    row['日期字串'], 
+                    f"${row['總銷售額']:,.0f}", 
+                    f"${row['總淨利']:,.0f}", 
+                    "--"
+                ))
+
+            # === 右側：商品分析 (依毛利率排序) ===
+            prod_group = df.groupby('商品名稱').agg({
+                '毛利率_數值': 'mean', # 平均毛利率
+                '總淨利': 'sum',      # 總獲利
+                '數量': 'sum'         # 總銷量
+            }).reset_index()
+
+            # 預設依「毛利率」降冪排序
+            prod_group = prod_group.sort_values('毛利率_數值', ascending=False)
+
+            for _, row in prod_group.iterrows():
+                margin_display = f"{row['毛利率_數值']:.1f}%"
+                self.tree_prod_stats.insert("", "end", values=(
+                    row['商品名稱'],
+                    margin_display,
+                    f"${row['總淨利']:,.0f}",
+                    int(row['數量'])
+                ))
+
+        except Exception as e:
+            # 錯誤處理
+            # print(f"分析錯誤: {e}") # Debug 用
+            messagebox.showerror("分析錯誤", f"計算時發生錯誤: {e}")
+
+    def sort_tree_column(self, tree, col, reverse):
+        """(進階功能) 點擊標題可以排序"""
+        l = [(tree.set(k, col), k) for k in tree.get_children('')]
+        
+        # 嘗試將字串轉數字進行排序 (去除 $ 和 % 符號)
+        try:
+            l.sort(key=lambda t: float(t[0].replace('$', '').replace(',', '').replace('%', '')), reverse=reverse)
+        except ValueError:
+            l.sort(reverse=reverse)
+
+        # 重新排列
+        for index, (val, k) in enumerate(l):
+            tree.move(k, '', index)
+
+        # 切換下次排序順序
+        tree.heading(col, command=lambda: self.sort_tree_column(tree, col, not reverse))
 
     # ================= 備份還原頁面 =================
     def setup_backup_tab(self):
         frame = ttk.Frame(self.tab_backup, padding=20)
         frame.pack(fill="both", expand=True)
 
-        auth_frame = ttk.LabelFrame(frame, text="1. Google 帳號連結", padding=15)
+           # ... (VIP 輸入區塊不用動) ...
+
+        # 1. Google 帳號連結
+        auth_frame = ttk.LabelFrame(frame, text="1. Google 帳號連結 (VIP 限定)", padding=15)
         auth_frame.pack(fill="x", pady=10)
         
-        self.lbl_auth_status = ttk.Label(auth_frame, text="狀態: 尚未連結", foreground="red")
+        # 預設顯示：請先解鎖
+        self.lbl_auth_status = ttk.Label(auth_frame, text="狀態: 🔒 請先輸入啟用碼解鎖", foreground="gray")
         self.lbl_auth_status.pack(side="left", padx=10)
         
-        self.btn_login = ttk.Button(auth_frame, text="登入 Google 帳號", command=self.start_login_thread)
+        # 【修正點 1】這裡加上 state="disabled"
+        self.btn_login = ttk.Button(auth_frame, text="登入 Google 帳號", command=self.start_login_thread, state="disabled")
         self.btn_login.pack(side="right")
 
+        # 2. 備份操作區塊
         op_frame = ttk.LabelFrame(frame, text="2. 檔案備份與還原 (自動存入「蝦皮進銷存系統_備份」)", padding=15)
         op_frame.pack(fill="both", expand=True, pady=10)
 
@@ -322,7 +545,8 @@ class SalesApp:
         up_frame.pack(fill="x", pady=5)
         ttk.Label(up_frame, text="將目前的 Excel 檔案備份到雲端 (建議每日執行):").pack(side="left")
         
-        self.btn_upload = ttk.Button(up_frame, text="⬆️ 上傳備份", command=self.start_upload_thread)
+        # 【修正點 2】這裡加上 state="disabled"
+        self.btn_upload = ttk.Button(up_frame, text="⬆️ 上傳備份", command=self.start_upload_thread, state="disabled")
         self.btn_upload.pack(side="right")
 
         ttk.Separator(op_frame, orient="horizontal").pack(fill="x", pady=15)
@@ -331,16 +555,15 @@ class SalesApp:
         
         cols = ("檔名", "備份時間")
         self.tree_backup = ttk.Treeview(op_frame, columns=cols, show='headings', height=10)
-        self.tree_backup.heading("檔名", text="備份檔名")
-        self.tree_backup.column("檔名", width=400)
-        self.tree_backup.heading("備份時間", text="建立時間 (已轉為台灣時間)")
-        self.tree_backup.column("備份時間", width=200)
+        # ... (Treeview 設定略) ...
         self.tree_backup.pack(fill="both", expand=True, pady=5)
-        
         self.tree_backup.bind("<Double-1>", self.action_restore_backup)
 
-        self.btn_refresh = ttk.Button(op_frame, text="🔄 重新整理列表", command=self.start_list_thread)
+        # 【修正點 3】這裡加上 state="disabled"
+        self.btn_refresh = ttk.Button(op_frame, text="🔄 重新整理列表", command=self.start_list_thread, state="disabled")
         self.btn_refresh.pack(fill="x", pady=5)
+
+        # ... (VIP 輸入框建立程式碼略) ...
 
 
           # === VIP 驗證區塊 ===
@@ -361,6 +584,7 @@ class SalesApp:
         
         # ... (後面的按鈕預設 disabled 邏輯同上)
 
+
     def unlock_vip_features(self):
         user_id = self.var_vip_user.get().strip()
         input_code = self.var_vip_code.get().strip().upper()
@@ -369,29 +593,108 @@ class SalesApp:
             messagebox.showwarning("提示", "請輸入授權帳號與啟用碼")
             return
 
-        # === 核心驗證邏輯 ===
-        # 這裡的 SALT 必須跟您的生成器完全一樣
-        SECRET_SALT = "My_Super_Secret_Salt_Key_2026"
-        
-        # 軟體自己算一次正確答案
-        raw_string = user_id + SECRET_SALT
+        # 讀取全域變數的 SALT
+        # raw_string = user_id + SECRET_SALT  <-- 記得這裡要用全域變數，不要重複定義
+        try:
+            # 確保有讀到 SECRET_SALT，如果沒有定義，就用預設值 (避免報錯)
+            salt = globals().get('SECRET_SALT', "DEMO_SALT_FOR_OPENSOURCE")
+            raw_string = user_id + salt
+        except:
+             raw_string = user_id + "DEMO_SALT_FOR_OPENSOURCE"
+
         expected_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
         
-        # 比對客戶輸入的 跟 算出來的 是否一致
         if input_code == expected_code:
             self.is_vip = True
-            messagebox.showinfo("成功", "VIP 功能已解鎖！\n請接著進行 Google 帳號登入。")
+            
+            # === 【新增這段】儲存授權檔與路徑 ===
+            try:
+                current_path = os.path.abspath(sys.executable)
+                save_data = {
+                    "user_id": user_id,
+                    "license_key": input_code,
+                    "install_path": current_path  # 綁定目前路徑
+                }
+                with open("license.json", "w", encoding="utf-8") as f:
+                    json.dump(save_data, f)
+            except Exception as e:
+                messagebox.showerror("錯誤", f"授權存檔失敗: {e}")
+            # ===================================
+
+            messagebox.showinfo("成功", "VIP 功能已解鎖！\n程式已綁定此資料夾。\n若移動程式位置，需重新輸入啟用碼。")
             
             # 解鎖按鈕
             self.btn_login.config(state="normal")
             self.lbl_auth_status.config(text="狀態: 尚未連結 (請點擊登入)", foreground="red")
+            
             if self.drive_manager.is_authenticated:
                  self.btn_upload.config(state="normal")
-                 
-            # (進階) 這裡可以把 user_id 和 code 存到一個本地文件 config.ini
-            # 下次打開程式自動讀取並驗證，不用每次都輸入
+                 self.btn_refresh.config(state="normal")
         else:
-            messagebox.showerror("錯誤", "啟用碼錯誤或是帳號不符！\n請聯繫開發者獲取正確授權。")
+            messagebox.showerror("錯誤", "啟用碼錯誤！")
+
+
+        
+
+    def check_license_on_startup(self):
+        """
+        程式啟動時，檢查是否有有效的授權檔
+        驗證:1. 金鑰正確性 2. 執行路徑是否改變
+        """
+        if not os.path.exists("license.json"):
+            return # 沒有授權檔，保持鎖定
+            
+        try:
+            with open("license.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            saved_user = data.get("user_id", "")
+            saved_key = data.get("license_key", "")
+            bound_path = data.get("install_path", "")
+            
+            # === 1. 檢查路徑是否改變 (防複製/移動) ===
+            # sys.executable 會抓到目前 .exe 的絕對路徑
+            current_path = os.path.abspath(sys.executable)
+            
+            # 如果是在開發環境 (py檔)，sys.executable 會是 python.exe 的路徑，
+            # 為了方便測試，我們可以放寬開發環境的檢查，只針對打包後的 EXE 檢查
+            if getattr(sys, 'frozen', False): 
+                # 這是打包後的 EXE 環境
+                if current_path != bound_path:
+                    # 路徑不符，視為非法移動
+                    messagebox.showwarning("授權失效", "偵測到程式已被移動或複製！\n為了安全起見，請重新輸入啟用碼進行綁定。")
+                    try:
+                        os.remove("license.json") # 刪除舊授權
+                    except:
+                        pass
+                    return 
+
+            # === 2. 重新驗證金鑰 (防修改存檔) ===
+            try:
+                salt = globals().get('SECRET_SALT', "DEMO_SALT_FOR_OPENSOURCE")
+                raw_string = saved_user + salt
+            except:
+                raw_string = saved_user + "DEMO_SALT_FOR_OPENSOURCE"
+                
+            expected_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
+            
+            if saved_key == expected_code:
+                # 通過驗證！自動解鎖
+                self.is_vip = True
+                self.var_vip_user.set(saved_user)
+                self.var_vip_code.set(saved_key)
+                
+                # 解鎖 UI
+                self.btn_login.config(state="normal")
+                self.lbl_auth_status.config(text="狀態: 🔒 VIP 授權有效 (自動登入)", foreground="green")
+                
+                # 如果有 token，連備份按鈕也一起開
+                if self.drive_manager.is_authenticated:
+                    self.btn_upload.config(state="normal")
+                    self.btn_refresh.config(state="normal")
+                    self.lbl_auth_status.config(text="狀態: ✅ 系統就緒 (已連結 Google)", foreground="green")
+        except Exception as e:
+            print(f"授權讀取失敗: {e}")
 
     # --- 執行緒相關函數 ---
     def start_login_thread(self):
@@ -407,6 +710,11 @@ class SalesApp:
         self.btn_login.config(state="normal")
         if success:
             self.lbl_auth_status.config(text=f"狀態: 登入成功", foreground="green")
+            
+            # 【修正點 5】登入成功後，解鎖功能按鈕
+            self.btn_upload.config(state="normal")
+            self.btn_refresh.config(state="normal")
+            
             self.start_list_thread() 
         else:
             self.lbl_auth_status.config(text=f"狀態: {msg}", foreground="red")
@@ -622,6 +930,7 @@ class SalesApp:
 
         ttk.Button(sum_frame, text="✔ 送出訂單", command=self.submit_order).pack(fill="x", pady=5)
 
+
     def setup_product_tab(self):
         paned = ttk.PanedWindow(self.tab_products, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
@@ -690,6 +999,253 @@ class SalesApp:
 
         self.update_mgmt_prod_list()
 
+    #================= 銷售紀錄修改 (新功能) =================
+    def setup_sales_edit_tab(self):
+        paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
+        paned.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # 1. 上方：列表區
+        list_frame = ttk.LabelFrame(paned, text="銷售歷史紀錄 (點擊項目進行修改)", padding=5)
+        paned.add(list_frame, weight=3)
+
+        # 建立 Treeview
+        cols = ("日期", "平台", "商品", "數量", "售價", "手續費", "淨利", "毛利")
+        self.tree_sales_edit = ttk.Treeview(list_frame, columns=cols, show='headings', height=12)
+        
+        # 設定欄寬
+        self.tree_sales_edit.heading("日期", text="日期"); self.tree_sales_edit.column("日期", width=90)
+        self.tree_sales_edit.heading("平台", text="平台"); self.tree_sales_edit.column("平台", width=80)
+        self.tree_sales_edit.heading("商品", text="商品名稱"); self.tree_sales_edit.column("商品", width=150)
+        self.tree_sales_edit.heading("數量", text="數量"); self.tree_sales_edit.column("數量", width=50, anchor="center")
+        self.tree_sales_edit.heading("售價", text="售價"); self.tree_sales_edit.column("售價", width=60, anchor="e")
+        self.tree_sales_edit.heading("手續費", text="手續費"); self.tree_sales_edit.column("手續費", width=60, anchor="e")
+        self.tree_sales_edit.heading("淨利", text="淨利"); self.tree_sales_edit.column("淨利", width=60, anchor="e")
+        self.tree_sales_edit.heading("毛利", text="毛利%"); self.tree_sales_edit.column("毛利", width=60, anchor="e")
+
+        scrolly = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree_sales_edit.yview)
+        self.tree_sales_edit.configure(yscrollcommand=scrolly.set)
+        self.tree_sales_edit.pack(side="left", fill="both", expand=True)
+        scrolly.pack(side="right", fill="y")
+        
+        # 綁定選擇事件
+        self.tree_sales_edit.bind("<<TreeviewSelect>>", self.on_sales_edit_select)
+
+        # 重新整理按鈕
+        btn_refresh = ttk.Button(list_frame, text="🔄 重新讀取 Excel", command=self.load_sales_records_for_edit)
+        btn_refresh.pack(fill="x", side="bottom")
+
+        # 2. 下方：編輯區
+        edit_frame = ttk.LabelFrame(paned, text="✏️ 修改選中資料 (數值修改後，系統會自動重算毛利)", padding=15)
+        paned.add(edit_frame, weight=1)
+
+        # 變數宣告
+        self.var_edit_idx = tk.IntVar(value=-1) # 紀錄 Excel 中的原始索引
+        self.var_edit_date = tk.StringVar()
+        self.var_edit_name = tk.StringVar()
+        self.var_edit_qty = tk.IntVar(value=0)
+        self.var_edit_price = tk.DoubleVar(value=0)
+        self.var_edit_cost = tk.DoubleVar(value=0)
+        self.var_edit_fee = tk.DoubleVar(value=0)
+        self.var_edit_deduct = tk.DoubleVar(value=0) # 其他扣費
+
+        # 排版 (Grid)
+        grid_opts = {'padx': 5, 'pady': 5, 'sticky': 'w'}
+        
+        ttk.Label(edit_frame, text="訂單日期:").grid(row=0, column=0, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_date, width=15).grid(row=0, column=1, **grid_opts)
+
+        ttk.Label(edit_frame, text="商品名稱:").grid(row=0, column=2, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_name, width=25).grid(row=0, column=3, **grid_opts)
+
+        ttk.Label(edit_frame, text="數量:").grid(row=1, column=0, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_qty, width=10).grid(row=1, column=1, **grid_opts)
+
+        ttk.Label(edit_frame, text="單價(售):").grid(row=1, column=2, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_price, width=10).grid(row=1, column=3, **grid_opts)
+
+        ttk.Label(edit_frame, text="單價(進):").grid(row=2, column=0, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_cost, width=10).grid(row=2, column=1, **grid_opts)
+
+        ttk.Label(edit_frame, text="手續費:").grid(row=2, column=2, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_fee, width=10).grid(row=2, column=3, **grid_opts)
+        
+        ttk.Label(edit_frame, text="其他扣費:").grid(row=2, column=4, **grid_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_edit_deduct, width=8).grid(row=2, column=5, **grid_opts)
+
+        # 按鈕區
+        btn_area = ttk.Frame(edit_frame)
+        btn_area.grid(row=3, column=0, columnspan=6, pady=15, sticky="ew")
+        
+        ttk.Button(btn_area, text="💾 確認修改並重算", command=self.save_sales_edit).pack(side="left", fill="x", expand=True, padx=5)
+        ttk.Button(btn_area, text="🗑️ 刪除此筆紀錄", command=self.delete_sales_record).pack(side="left", fill="x", expand=True, padx=5)
+
+        # 初始載入
+        self.load_sales_records_for_edit()
+        self.calculate_analysis_data()
+
+    def load_sales_records_for_edit(self):
+        """讀取 Excel 銷售紀錄到列表 (修正顯示版)"""
+        for i in self.tree_sales_edit.get_children():
+            self.tree_sales_edit.delete(i)
+        
+        try:
+            if not os.path.exists(FILE_NAME): return
+            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+            
+            # 自動過濾掉 Unnamed 欄位，避免讀錯
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+            
+            if df.empty: return
+
+            for idx, row in df.iterrows():
+                date = str(row.get('日期', '')) if pd.notna(row.get('日期')) else ""
+                platform = str(row.get('交易平台', '')) if pd.notna(row.get('交易平台')) else ""
+                item = str(row.get('商品名稱', ''))
+                qty = row.get('數量', 0)
+                price = row.get('單價(售)', 0)
+                fee = row.get('分攤手續費', 0)
+                profit = row.get('總淨利', 0)
+                
+                # === 【關鍵修正】毛利顯示邏輯 ===
+                raw_margin = row.get('毛利率')
+                
+                if pd.isna(raw_margin): # 如果是 NaN
+                    margin = "0.0%"
+                elif isinstance(raw_margin, (int, float)): # 如果是數字 (28.7)
+                    margin = f"{raw_margin}%"
+                else: # 如果是舊字串 ("28.7%")
+                    margin = str(raw_margin)
+                # =============================
+
+                self.tree_sales_edit.insert("", "end", text=str(idx), values=(date, platform, item, qty, price, fee, profit, margin))
+
+        except Exception as e:
+            print(f"讀取列表失敗: {e}")
+
+    def on_sales_edit_select(self, event):
+        """點擊列表時，將資料填入編輯框"""
+        sel = self.tree_sales_edit.selection()
+        if not sel: return
+        
+        item = self.tree_sales_edit.item(sel[0])
+        idx = int(item['text']) # 取出原始 Excel Index
+        self.var_edit_idx.set(idx)
+
+        # 從 Excel 讀取完整資料 (因為 Treeview 只顯示部分欄位)
+        try:
+            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+            row = df.iloc[idx]
+            
+            self.var_edit_date.set(str(row['日期']))
+            self.var_edit_name.set(str(row['商品名稱']))
+            self.var_edit_qty.set(int(row['數量']))
+            self.var_edit_price.set(float(row['單價(售)']))
+            self.var_edit_cost.set(float(row['單價(進)']))
+            self.var_edit_fee.set(float(row['分攤手續費']))
+            
+            # 其他扣費不是每個訂單都有，需計算: 總銷售 - 總成本 - 淨利 - 手續費
+            # 但 Excel 其實沒有直接存 "其他扣費金額"，而是 "扣費項目" 字串
+            # 這裡我們為了簡化，不做反推，我們假設使用者修改的是「手續費」或「商品本身數據」
+            # 若要精確，可以預設為 0，除非使用者自己有紀錄
+
+            self.var_edit_deduct.set(0) 
+
+        except Exception as e:
+            messagebox.showerror("讀取錯誤", str(e))
+
+    def save_sales_edit(self):
+        """儲存修改並自動重算 (含 Excel 欄位自動修復)"""
+        idx = self.var_edit_idx.get()
+        if idx < 0: return
+
+        try:
+            # 1. 取得新數值
+            qty = self.var_edit_qty.get()
+            price_sell = self.var_edit_price.get()
+            price_cost = self.var_edit_cost.get()
+            fee = self.var_edit_fee.get()
+            deduct = self.var_edit_deduct.get()
+
+            # 2. 自動重算
+            total_sales = qty * price_sell
+            total_cost = qty * price_cost
+            net_profit = total_sales - total_cost - fee - deduct
+            
+            margin_pct = 0.0
+            if total_sales > 0:
+                margin_pct = (net_profit / total_sales) * 100
+            
+            # 3. 讀取與修復 Excel
+            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+            
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+
+
+            cols_to_float = ['單價(售)', '單價(進)', '分攤手續費', '總銷售額', '總成本', '總淨利', '毛利率']
+            for col in cols_to_float:
+                if col not in df.columns:
+                    df[col] = 0.0 # 若欄位遺失則補回
+                df[col] = df[col].astype(float)
+            # ==========================================
+
+            # 更新資料
+            df.at[idx, '日期'] = self.var_edit_date.get()
+            df.at[idx, '商品名稱'] = self.var_edit_name.get()
+            df.at[idx, '數量'] = qty
+            df.at[idx, '單價(售)'] = price_sell
+            df.at[idx, '單價(進)'] = price_cost
+            df.at[idx, '分攤手續費'] = fee
+            
+            df.at[idx, '總銷售額'] = total_sales
+            df.at[idx, '總成本'] = total_cost
+            df.at[idx, '總淨利'] = round(net_profit, 2)
+            
+            # 存數字 (例如 28.7)
+            df.at[idx, '毛利率'] = round(margin_pct, 1)
+
+            with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                try:
+                    df_prods = pd.read_excel(FILE_NAME, sheet_name='商品資料')
+                except:
+                    df_prods = pd.DataFrame()
+                
+                df.to_excel(writer, sheet_name='銷售紀錄', index=False)
+                df_prods.to_excel(writer, sheet_name='商品資料', index=False)
+
+            messagebox.showinfo("成功", "資料已修正！Excel 欄位格式已自動校正。")
+            self.load_sales_records_for_edit()
+            self.calculate_analysis_data()
+            
+        except PermissionError:
+            messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"儲存失敗: {str(e)}")
+
+    def delete_sales_record(self):
+        idx = self.var_edit_idx.get()
+        if idx < 0: return
+        
+        confirm = messagebox.askyesno("確認刪除", "確定要刪除這筆銷售紀錄嗎？\n(注意：這不會自動把庫存加回去，請手動調整庫存)")
+        if confirm:
+            try:
+                df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+                df = df.drop(idx) # 刪除該行
+                
+                # 讀取商品資料以保留
+                df_prods = pd.read_excel(FILE_NAME, sheet_name='商品資料')
+
+                with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
+                    df.to_excel(writer, sheet_name='銷售紀錄', index=False)
+                    df_prods.to_excel(writer, sheet_name='商品資料', index=False)
+                
+                messagebox.showinfo("成功", "紀錄已刪除")
+                self.load_sales_records_for_edit()
+                self.var_edit_idx.set(-1)
+                
+            except PermissionError:
+                messagebox.showerror("錯誤", "Excel 檔案未關閉！")
+
+
     def setup_about_tab(self):
         frame = ttk.Frame(self.tab_about, padding=40)
         frame.pack(expand=True, fill="both")
@@ -703,6 +1259,7 @@ class SalesApp:
         spin.bind('<KeyRelease>', self.change_font_size)
         
         ttk.Label(font_frame, text="(調整後表格行高會自動變更)", foreground="gray").pack(side="left", padx=10)
+
 
 
         ttk.Label(frame, text="關於本軟體", font=("微軟正黑體", 20, "bold")).pack(pady=10)
@@ -869,6 +1426,7 @@ class SalesApp:
         ship_method = self.var_ship_method.get() if self.var_enable_cust.get() else ""
         platform_name = self.var_platform.get() if self.var_enable_cust.get() else "" 
         
+
         t_sales, t_fee = self.update_totals()
         fee_tag = self.var_fee_tag.get()
         try: extra_val = float(self.var_extra_fee.get())
@@ -920,7 +1478,7 @@ class SalesApp:
                     "分攤手續費": round(alloc_fee, 2),
                     "扣費項目": fee_tag, 
                     "總淨利": round(net, 2),
-                    "毛利率": f"{margin_pct:.1f}%"
+                    "毛利率": round(margin_pct, 1)
                 })
 
                 prod_name = item['name']
@@ -970,6 +1528,7 @@ class SalesApp:
             self.var_cust_loc.set("")
             self.var_ship_method.set("")
             self.var_sel_stock_info.set("--")
+            
 
         except PermissionError: messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
         except Exception as e: messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
@@ -1088,8 +1647,6 @@ class SalesApp:
         except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
 
 
-    
-
 if __name__ == "__main__":
     root = tk.Tk()
     style = ttk.Style()
@@ -1099,3 +1656,5 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
+    root.mainloop()
+
