@@ -1,7 +1,5 @@
 #shopee-oms 3.5 完整版
 
-#shopee-oms 3.4 完整版
-
 import json
 import sys
 import tkinter as tk
@@ -1707,3 +1705,4 @@ if __name__ == "__main__":
     app = SalesApp(root)
     root.mainloop()
     root.mainloop()
+
