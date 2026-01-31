@@ -1,4 +1,4 @@
-#shopee-oms 3.4 完整版
+#shopee-oms 3.5 完整版
 
 import json
 import sys
@@ -999,6 +999,7 @@ class SalesApp:
 
         self.update_mgmt_prod_list()
 
+    
     #================= 銷售紀錄修改 (新功能) =================
     def setup_sales_edit_tab(self):
         paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
@@ -1009,12 +1010,12 @@ class SalesApp:
         paned.add(list_frame, weight=3)
 
         # 建立 Treeview
-        cols = ("日期", "平台", "商品", "數量", "售價", "手續費", "淨利", "毛利")
+        cols = ("日期", "買家名稱", "商品", "數量", "售價", "手續費", "淨利", "毛利")
         self.tree_sales_edit = ttk.Treeview(list_frame, columns=cols, show='headings', height=12)
         
         # 設定欄寬
         self.tree_sales_edit.heading("日期", text="日期"); self.tree_sales_edit.column("日期", width=90)
-        self.tree_sales_edit.heading("平台", text="平台"); self.tree_sales_edit.column("平台", width=80)
+        self.tree_sales_edit.heading("買家名稱", text="買家名稱"); self.tree_sales_edit.column("買家名稱", width=80)
         self.tree_sales_edit.heading("商品", text="商品名稱"); self.tree_sales_edit.column("商品", width=150)
         self.tree_sales_edit.heading("數量", text="數量"); self.tree_sales_edit.column("數量", width=50, anchor="center")
         self.tree_sales_edit.heading("售價", text="售價"); self.tree_sales_edit.column("售價", width=60, anchor="e")
@@ -1084,40 +1085,52 @@ class SalesApp:
         self.calculate_analysis_data()
 
     def load_sales_records_for_edit(self):
-        """讀取 Excel 銷售紀錄到列表 (修正顯示版)"""
+        """讀取 Excel 銷售紀錄到列表 (修正為顯示買家名稱)"""
         for i in self.tree_sales_edit.get_children():
             self.tree_sales_edit.delete(i)
         
         try:
             if not os.path.exists(FILE_NAME): return
             df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
-            
-            # 自動過濾掉 Unnamed 欄位，避免讀錯
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             
             if df.empty: return
 
+            # 用來記憶上一筆有資料的內容 (處理空白列)
+            last_date = ""
+            last_buyer = ""
+
             for idx, row in df.iterrows():
-                date = str(row.get('日期', '')) if pd.notna(row.get('日期')) else ""
-                platform = str(row.get('交易平台', '')) if pd.notna(row.get('交易平台')) else ""
-                item = str(row.get('商品名稱', ''))
+                raw_date = str(row.get('日期', '')) if pd.notna(row.get('日期')) else ""
+                
+                # --- [關鍵修正]：這裡改為讀取 '買家名稱' ---
+                # 原本可能是 row.get('交易平台', '')
+                raw_buyer = str(row.get('買家名稱', '')) if pd.notna(row.get('買家名稱')) else ""
+                # ----------------------------------------
+
+                item_name = str(row.get('商品名稱', ''))
+
+                # 自動補齊邏輯
+                if raw_date == "" and raw_buyer == "" and item_name != "":
+                    display_date = last_date
+                    display_buyer = last_buyer
+                else:
+                    display_date = raw_date
+                    display_buyer = raw_buyer
+                    if raw_date != "": last_date = raw_date
+                    if raw_buyer != "": last_buyer = raw_buyer
+
                 qty = row.get('數量', 0)
                 price = row.get('單價(售)', 0)
                 fee = row.get('分攤手續費', 0)
                 profit = row.get('總淨利', 0)
                 
-                # === 【關鍵修正】毛利顯示邏輯 ===
                 raw_margin = row.get('毛利率')
-                
-                if pd.isna(raw_margin): # 如果是 NaN
-                    margin = "0.0%"
-                elif isinstance(raw_margin, (int, float)): # 如果是數字 (28.7)
-                    margin = f"{raw_margin}%"
-                else: # 如果是舊字串 ("28.7%")
-                    margin = str(raw_margin)
-                # =============================
+                if pd.isna(raw_margin): margin = "0.0%"
+                elif isinstance(raw_margin, (int, float)): margin = f"{raw_margin}%"
+                else: margin = str(raw_margin)
 
-                self.tree_sales_edit.insert("", "end", text=str(idx), values=(date, platform, item, qty, price, fee, profit, margin))
+                self.tree_sales_edit.insert("", "end", text=str(idx), values=(display_date, display_buyer, item_name, qty, price, fee, profit, margin))
 
         except Exception as e:
             print(f"讀取列表失敗: {e}")
@@ -1212,7 +1225,7 @@ class SalesApp:
                 df.to_excel(writer, sheet_name='銷售紀錄', index=False)
                 df_prods.to_excel(writer, sheet_name='商品資料', index=False)
 
-            messagebox.showinfo("成功", "資料已修正！Excel 欄位格式已自動校正。")
+            messagebox.showinfo("成功", "資料已修正!Excel 欄位格式已自動校正。")
             self.load_sales_records_for_edit()
             self.calculate_analysis_data()
             
@@ -1421,11 +1434,25 @@ class SalesApp:
     def submit_order(self):
         if not self.cart_data: return
         
-        cust_name = self.var_cust_name.get() if self.var_enable_cust.get() else ""
-        cust_loc = self.var_cust_loc.get() if self.var_enable_cust.get() else ""
-        ship_method = self.var_ship_method.get() if self.var_enable_cust.get() else ""
-        platform_name = self.var_platform.get() if self.var_enable_cust.get() else "" 
-        
+        # 清洗函式
+        def clean_text(text):
+            if not text: return ""
+            text = text.replace("\n", "").replace("\r", "")
+            return text.strip()
+
+        # 讀取介面資料
+        if self.var_enable_cust.get():
+            cust_name = clean_text(self.var_cust_name.get())
+            cust_loc = clean_text(self.var_cust_loc.get())
+            ship_method = self.var_ship_method.get()
+            platform_name = self.var_platform.get()
+        else:
+            cust_name = ""
+            cust_loc = ""
+            ship_method = ""
+            platform_name = ""
+            
+        date_str = self.var_date.get().strip()
 
         t_sales, t_fee = self.update_totals()
         fee_tag = self.var_fee_tag.get()
@@ -1436,12 +1463,11 @@ class SalesApp:
 
         try:
             rows = []
-            date_str = self.var_date.get()
             out_of_stock_warnings = [] 
-
             df_prods_current = pd.read_excel(FILE_NAME, sheet_name='商品資料')
 
             for i, item in enumerate(self.cart_data):
+                # 第一個商品才填寫表頭資訊，第二個商品留白
                 if i == 0:
                     row_date = date_str
                     row_platform = platform_name 
@@ -1458,15 +1484,13 @@ class SalesApp:
                 ratio = item['total_sales'] / t_sales if t_sales > 0 else 0
                 alloc_fee = t_fee * ratio
                 net = item['total_sales'] - item['total_cost'] - alloc_fee
+                margin_pct = (net / item['total_sales']) * 100 if item['total_sales'] > 0 else 0.0
                 
-                margin_pct = 0.0
-                if item['total_sales'] > 0:
-                    margin_pct = (net / item['total_sales']) * 100
-                
+                # --- [確保寫入正確] ---
                 rows.append({
                     "日期": row_date, 
-                    "交易平台": row_platform, 
-                    "買家名稱": row_buyer, 
+                    "交易平台": row_platform,  # 對應平台變數
+                    "買家名稱": row_buyer,     # 對應買家變數
                     "寄送方式": row_ship, 
                     "取貨地點": row_loc,
                     "商品名稱": item['name'], 
@@ -1480,22 +1504,23 @@ class SalesApp:
                     "總淨利": round(net, 2),
                     "毛利率": round(margin_pct, 1)
                 })
+                # ---------------------
 
+                # 扣庫存邏輯
                 prod_name = item['name']
                 sold_qty = item['qty']
-                
                 idxs = df_prods_current[df_prods_current['商品名稱'] == prod_name].index
                 if not idxs.empty:
                     target_idx = idxs[0]
                     raw_stock = df_prods_current.at[target_idx, '目前庫存']
                     try: current = int(raw_stock)
                     except: current = 0
-                        
                     new_stock = current - sold_qty
                     df_prods_current.at[target_idx, '目前庫存'] = new_stock
                     if new_stock <= 0:
                         out_of_stock_warnings.append(f"● {prod_name} (剩餘: {new_stock})")
 
+            # 寫入 Excel
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 df_prods_current = df_prods_current.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
                 df_prods_current.to_excel(writer, sheet_name='商品資料', index=False)
@@ -1528,7 +1553,6 @@ class SalesApp:
             self.var_cust_loc.set("")
             self.var_ship_method.set("")
             self.var_sel_stock_info.set("--")
-            
 
         except PermissionError: messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
         except Exception as e: messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
@@ -1657,4 +1681,3 @@ if __name__ == "__main__":
     app = SalesApp(root)
     root.mainloop()
     root.mainloop()
-
