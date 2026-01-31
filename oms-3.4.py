@@ -1,5 +1,7 @@
 #shopee-oms 3.5 完整版
 
+#shopee-oms 3.4 完整版
+
 import json
 import sys
 import tkinter as tk
@@ -1434,13 +1436,12 @@ class SalesApp:
     def submit_order(self):
         if not self.cart_data: return
         
-        # 清洗函式
+        # --- 1. 資料清洗 ---
         def clean_text(text):
             if not text: return ""
-            text = text.replace("\n", "").replace("\r", "")
-            return text.strip()
+            return text.replace("\n", "").replace("\r", "").strip()
 
-        # 讀取介面資料
+        # --- 2. 讀取介面資料 ---
         if self.var_enable_cust.get():
             cust_name = clean_text(self.var_cust_name.get())
             cust_loc = clean_text(self.var_cust_loc.get())
@@ -1454,6 +1455,11 @@ class SalesApp:
             
         date_str = self.var_date.get().strip()
 
+        # --- 3. 生成訂單編號 ---
+        now = datetime.now()
+        order_id = now.strftime("%Y%m%d%H%M%S") 
+
+        # --- 4. 計算金額 ---
         t_sales, t_fee = self.update_totals()
         fee_tag = self.var_fee_tag.get()
         try: extra_val = float(self.var_extra_fee.get())
@@ -1464,10 +1470,12 @@ class SalesApp:
         try:
             rows = []
             out_of_stock_warnings = [] 
+            
+            # 讀取商品資料以更新庫存
             df_prods_current = pd.read_excel(FILE_NAME, sheet_name='商品資料')
 
             for i, item in enumerate(self.cart_data):
-                # 第一個商品才填寫表頭資訊，第二個商品留白
+                # 第一筆商品才顯示表頭，其餘留白
                 if i == 0:
                     row_date = date_str
                     row_platform = platform_name 
@@ -1486,11 +1494,11 @@ class SalesApp:
                 net = item['total_sales'] - item['total_cost'] - alloc_fee
                 margin_pct = (net / item['total_sales']) * 100 if item['total_sales'] > 0 else 0.0
                 
-                # --- [確保寫入正確] ---
                 rows.append({
+                    "訂單編號": order_id,
                     "日期": row_date, 
-                    "交易平台": row_platform,  # 對應平台變數
-                    "買家名稱": row_buyer,     # 對應買家變數
+                    "買家名稱": row_buyer,     # 確保這裡變數是對的
+                    "交易平台": row_platform,  # 確保這裡變數是對的
                     "寄送方式": row_ship, 
                     "取貨地點": row_loc,
                     "商品名稱": item['name'], 
@@ -1504,9 +1512,8 @@ class SalesApp:
                     "總淨利": round(net, 2),
                     "毛利率": round(margin_pct, 1)
                 })
-                # ---------------------
 
-                # 扣庫存邏輯
+                # 庫存扣除
                 prod_name = item['name']
                 sold_qty = item['qty']
                 idxs = df_prods_current[df_prods_current['商品名稱'] == prod_name].index
@@ -1520,12 +1527,26 @@ class SalesApp:
                     if new_stock <= 0:
                         out_of_stock_warnings.append(f"● {prod_name} (剩餘: {new_stock})")
 
-            # 寫入 Excel
+            # --- 寫入 Excel (商品資料) ---
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 df_prods_current = df_prods_current.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
                 df_prods_current.to_excel(writer, sheet_name='商品資料', index=False)
 
+            # --- 寫入 Excel (銷售紀錄) ---
             df_sales_new = pd.DataFrame(rows)
+            
+            # ★★★ [關鍵修正] 強制指定欄位順序，對齊 Excel ★★★
+            # 這是根據您截圖的順序排列的
+            excel_columns_order = [
+                "訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
+                "商品名稱", "數量", "單價(售)", "單價(進)", 
+                "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
+            ]
+            
+            # 如果 DataFrame 有多餘或缺少欄位，這裡會自動對齊
+            df_sales_new = df_sales_new[excel_columns_order]
+            # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
                 try:
                     df_ex = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
@@ -1534,13 +1555,15 @@ class SalesApp:
                 except:
                     start_row = 0
                     header = True
+                
                 df_sales_new.to_excel(writer, sheet_name='銷售紀錄', index=False, header=header, startrow=start_row)
 
+            # 更新介面
             self.products_df = df_prods_current
             self.update_sales_prod_list()
             self.update_mgmt_prod_list()
 
-            msg = "訂單已儲存！庫存已更新。"
+            msg = f"訂單 {order_id} 已儲存！\n欄位順序已校正。"
             if out_of_stock_warnings:
                 msg += "\n\n⚠️ 注意！以下商品已售完或庫存不足：\n" + "\n".join(out_of_stock_warnings)
             
@@ -1551,11 +1574,14 @@ class SalesApp:
             self.update_totals()
             self.var_cust_name.set("")
             self.var_cust_loc.set("")
-            self.var_ship_method.set("")
             self.var_sel_stock_info.set("--")
 
-        except PermissionError: messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
-        except Exception as e: messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
+        except PermissionError: 
+            messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
+        except KeyError as e:
+            messagebox.showerror("錯誤", f"欄位名稱不符，請檢查 Excel 標題: {str(e)}")
+        except Exception as e: 
+            messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
 
     def update_mgmt_prod_list(self, event=None):
         search_term = self.var_mgmt_search.get().lower()
