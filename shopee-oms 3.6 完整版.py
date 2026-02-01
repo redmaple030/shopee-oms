@@ -19,7 +19,6 @@ import hashlib
 try:
     from secrets_config import SECRET_SALT
 except ImportError:
-    # 這是為了防止別人下載原始碼後報錯，給一個假的值
     SECRET_SALT = "DEMO_SALT_FOR_OPENSOURCE"
 
 
@@ -2177,4 +2176,5 @@ if __name__ == "__main__":
     app = SalesApp(root)
     root.mainloop()
     root.mainloop()
+
 
