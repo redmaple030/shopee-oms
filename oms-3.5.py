@@ -1,4 +1,4 @@
-#shopee-oms 3.5 完整版
+#shopee-oms 3.6 完整版
 
 import json
 import sys
@@ -11,6 +11,8 @@ import re
 import pickle
 import threading 
 import hashlib
+
+
 
 
 # 1. 匯入敏感資料
@@ -49,6 +51,11 @@ FILE_NAME = 'sales_data.xlsx'
 CREDENTIALS_FILE = resource_path('credentials.json')  
 TOKEN_FILE = 'token.json'             
 SCOPES = ['https://www.googleapis.com/auth/drive.file'] 
+
+SHEET_SALES = '銷售紀錄'      # 歷史已完成訂單
+SHEET_TRACKING = '訂單追蹤'   # 未完成/出貨中 (緩衝區)
+SHEET_RETURNS = '退貨紀錄'    # 退貨區
+SHEET_PRODUCTS = '商品資料'
 
 # 設定雲端硬碟上的備份資料夾名稱
 BACKUP_FOLDER_NAME = "蝦皮進銷存系統_備份"
@@ -199,6 +206,7 @@ class GoogleDriveSync:
             return False, f"下載失敗: {str(e)}"
 
 class SalesApp:
+    
     def __init__(self, root):
         self.root = root
         self.root.title("蝦皮/網拍進銷存系統 (V3.6 時區修正版)")
@@ -279,23 +287,41 @@ class SalesApp:
 
 
     def check_excel_file(self):
-        if not os.path.exists(FILE_NAME):
-            try:
-                with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                    cols_sales = [
-                        "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
-                        "商品名稱", "數量", "單價(售)", "單價(進)", 
-                        "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
-                    ]
-                    df_sales = pd.DataFrame(columns=cols_sales)
-                    df_sales.to_excel(writer, sheet_name='銷售紀錄', index=False)
-                    
-                    cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"]
-                    df_prods = pd.DataFrame(columns=cols_prods)
-                    df_prods.loc[0] = ["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]
-                    df_prods.to_excel(writer, sheet_name='商品資料', index=False)
-            except Exception as e:
-                messagebox.showerror("錯誤", f"無法建立 Excel 檔案: {e}")
+            if not os.path.exists(FILE_NAME):
+                try:
+                    with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
+                        cols_sales = [
+                            "訂單編號", "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
+                            "商品名稱", "數量", "單價(售)", "單價(進)", 
+                            "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
+                        ]
+                        # 建立四個分頁
+                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_SALES, index=False)
+                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False) # 新增
+                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)  # 新增
+                        
+                        cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"]
+                        df_prods = pd.DataFrame(columns=cols_prods)
+                        df_prods.loc[0] = ["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]
+                        df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
+                except Exception as e:
+                    messagebox.showerror("錯誤", f"無法建立 Excel 檔案: {e}")
+            else:
+                # 如果檔案已存在，檢查是否缺少新分頁，若缺少則補上
+                try:
+                    with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                        wb = writer.book
+                        cols_sales = [
+                            "訂單編號", "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
+                            "商品名稱", "數量", "單價(售)", "單價(進)", 
+                            "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
+                        ]
+                        if SHEET_TRACKING not in wb.sheetnames:
+                            pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
+                        if SHEET_RETURNS not in wb.sheetnames:
+                            pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
+                except:
+                    pass # 忽略錯誤，可能是正在開啟中
 
     def load_products(self):
         try:
@@ -312,23 +338,30 @@ class SalesApp:
 
     def create_tabs(self):
         tab_control = ttk.Notebook(self.root)
+        
         self.tab_sales = ttk.Frame(tab_control)
+        self.tab_tracking = ttk.Frame(tab_control) 
+        self.tab_returns = ttk.Frame(tab_control) # [新增] 退貨紀錄頁面
         self.tab_sales_edit = ttk.Frame(tab_control) 
         self.tab_products = ttk.Frame(tab_control)
         self.tab_analysis = ttk.Frame(tab_control)
         self.tab_backup = ttk.Frame(tab_control) 
         self.tab_about = ttk.Frame(tab_control)
         
-        tab_control.add(self.tab_sales, text='銷售輸入 & 庫存')
-        tab_control.add(self.tab_sales_edit, text='銷售紀錄修改') 
+        tab_control.add(self.tab_sales, text='銷售輸入')
+        tab_control.add(self.tab_tracking, text='訂單追蹤查詢')
+        tab_control.add(self.tab_returns, text='退貨紀錄查詢')
+        tab_control.add(self.tab_sales_edit, text='銷售紀錄(已結案)') 
         tab_control.add(self.tab_products, text='商品資料管理')
-        tab_control.add(self.tab_analysis, text='營收與商品分析')
-        tab_control.add(self.tab_backup, text='雲端備份還原') 
-        tab_control.add(self.tab_about, text='設定與關於')
+        tab_control.add(self.tab_analysis, text='營收分析')
+        tab_control.add(self.tab_backup, text='雲端備份/資料復原') 
+        tab_control.add(self.tab_about, text='設定及關於')
         
         tab_control.pack(expand=1, fill="both")
         
         self.setup_sales_tab()
+        self.setup_tracking_tab()
+        self.setup_returns_tab()
         self.setup_sales_edit_tab()
         self.setup_product_tab()
         self.setup_analysis_tab()
@@ -566,7 +599,7 @@ class SalesApp:
         # ... (VIP 輸入框建立程式碼略) ...
 
 
-          # === VIP 驗證區塊 ===
+        # === VIP 驗證區塊 ===
         vip_frame = ttk.LabelFrame(frame, text="🔒 進階功能解鎖", padding=15)
         vip_frame.pack(fill="x", pady=10)
 
@@ -999,8 +1032,249 @@ class SalesApp:
 
         self.update_mgmt_prod_list()
 
+
+    def setup_tracking_tab(self):
+        """ 建立訂單追蹤區 (緩衝區) """
+        frame = self.tab_tracking
+        # 1. 頂部操作
+        top_frame = ttk.Frame(frame, padding=5)
+        top_frame.pack(fill="x")
+        ttk.Button(top_frame, text="🔄 重新整理列表", command=self.load_tracking_data).pack(side="right")
+        ttk.Label(top_frame, text="此處為緩衝區。結案後進入「銷售紀錄」，退貨後進入「退貨紀錄」。", foreground="gray").pack(side="left")
+
+        # 2. 中間：列表
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        cols = ("訂單編號", "日期", "平台", "買家", "商品名稱", "數量", "售價")
+        self.tree_track = ttk.Treeview(tree_frame, columns=cols, show='headings', height=15)
+        for c in cols:
+            self.tree_track.heading(c, text=c)
+            self.tree_track.column(c, width=100 if "商品" not in c else 200)
+        
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_track.yview)
+        self.tree_track.configure(yscrollcommand=sb.set)
+        self.tree_track.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # 3. 下方：兩行按鈕區
+        btn_main_frame = ttk.LabelFrame(frame, text="訂單操作面板", padding=10)
+        btn_main_frame.pack(fill="x", padx=10, pady=10)
+
+        # 第一行：修改與刪除
+        row1 = ttk.Frame(btn_main_frame)
+        row1.pack(fill="x", pady=2)
+        ttk.Button(row1, text="✏️ 修改數量/售價", command=self.action_track_modify).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1, text="➖ 刪除單一商品 (補位)", command=self.action_track_delete_item).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1, text="🗑️ 刪除整筆訂單", command=self.action_track_delete_order).pack(side="left", fill="x", expand=True, padx=2)
+
+        # 第二行：結案與退貨
+        row2 = ttk.Frame(btn_main_frame)
+        row2.pack(fill="x", pady=2)
+        ttk.Button(row2, text="↩️ 退貨單一商品", command=self.action_track_return_item).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row2, text="⏪ 退貨整筆訂單", command=self.action_track_return_order).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row2, text="✅ 完成訂單 (整筆結案)", command=self.action_track_complete_order).pack(side="left", fill="x", expand=True, padx=2)
+
+        self.load_tracking_data()
+
+
+    def load_tracking_data(self):
+        """ 讀取『訂單追蹤』分頁的資料 (新增此函式) """
+        for i in self.tree_track.get_children():
+            self.tree_track.delete(i)
+        try:
+            if not os.path.exists(FILE_NAME): return
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            if '訂單編號' in df.columns:
+                df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
+            df = df.fillna("")
+            last_id, last_date, last_platform, last_buyer = "", "", "", ""
+            for idx, row in df.iterrows():
+                order_id = str(row.get('訂單編號', ''))
+                date = str(row.get('日期', ''))
+                platform = str(row.get('交易平台', ''))
+                buyer = str(row.get('買家名稱', ''))
+                if order_id == "nan" or order_id == "": order_id = last_id
+                else: last_id = order_id
+                if date == "": date = last_date
+                else: last_date = date
+                if platform == "": platform = last_platform
+                else: last_platform = platform
+                if buyer == "": buyer = last_buyer
+                else: last_buyer = buyer
+                self.tree_track.insert("", "end", text=str(idx), values=(
+                    order_id, date, platform, buyer,
+                    row.get('商品名稱', ''),
+                    int(row.get('數量', 0) if row.get('數量') != "" else 0),
+                    float(row.get('單價(售)', 0) if row.get('單價(售)') != "" else 0)
+                ))
+        except Exception as e:
+            print(f"讀取追蹤清單失敗: {e}")
+
+    def action_track_modify(self):
+        """ 修改資料: 跳出視窗修改數量與價格 """
+        sel = self.tree_track.selection()
+        if not sel:
+            messagebox.showwarning("提示", "請先選擇要修改的商品項目")
+            return
+        item = self.tree_track.item(sel[0]); idx = int(item['text']); vals = item['values']
+        prod_name = vals[4]; old_qty = vals[5]; old_price = vals[6]
+        win = tk.Toplevel(self.root); win.title(f"修改: {prod_name}"); win.geometry("300x200")
+        tk.Label(win, text="數量:").pack(pady=5)
+        var_qty = tk.IntVar(value=old_qty); tk.Entry(win, textvariable=var_qty).pack()
+        tk.Label(win, text="售價:").pack(pady=5)
+        var_price = tk.DoubleVar(value=old_price); tk.Entry(win, textvariable=var_price).pack()
+        def save_mod():
+            try:
+                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+                new_qty = var_qty.get(); new_price = var_price.get()
+                df.at[idx, '數量'] = new_qty; df.at[idx, '單價(售)'] = new_price
+                cost = df.at[idx, '單價(進)']; fee = df.at[idx, '分攤手續費']
+                df.at[idx, '總銷售額'] = new_qty * new_price
+                df.at[idx, '總成本'] = new_qty * cost
+                df.at[idx, '總淨利'] = (new_qty * new_price) - (new_qty * cost) - fee
+                self._save_all_sheets(df, SHEET_TRACKING)
+                messagebox.showinfo("成功", "資料已更新"); self.load_tracking_data(); win.destroy()
+            except Exception as e: messagebox.showerror("錯誤", f"存檔失敗: {e}")
+        tk.Button(win, text="確認修改", command=save_mod).pack(pady=15)
+
+    def action_track_delete_item(self):
+        """ 刪除單一商品 (含表頭自動遞補邏輯) """
+        sel = self.tree_track.selection()
+        if not sel: return
+        item = self.tree_track.item(sel[0]); idx = int(item['text'])
+        order_id = str(item['values'][0]); prod_name = str(item['values'][4])
+        if not messagebox.askyesno("刪除商品", f"確定要從訂單 [{order_id}] 中\n刪除商品「{prod_name}」嗎？"): return
+        try:
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
+            is_header = pd.notna(df.at[idx, '日期']) and str(df.at[idx, '日期']) != ""
+            if is_header:
+                mask_others = (df['訂單編號'] == order_id) & (df.index != idx)
+                others_indices = df[mask_others].index.tolist()
+                if others_indices:
+                    new_header_idx = others_indices[0]
+                    cols_to_inherit = ['日期', '交易平台', '買家名稱', '寄送方式', '取貨地點', '扣費項目']
+                    for col in cols_to_inherit: df.at[new_header_idx, col] = df.at[idx, col]
+            df.drop(idx, inplace=True)
+            self._save_all_sheets(df, SHEET_TRACKING)
+            messagebox.showinfo("成功", "商品已刪除"); self.load_tracking_data()
+        except Exception as e: messagebox.showerror("錯誤", f"刪除失敗: {e}")
+
+    def action_track_delete_order(self):
+        """ 刪除整筆訂單 """
+        sel = self.tree_track.selection()
+        if not sel: return
+        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0])
+        if not messagebox.askyesno("刪除整筆", f"確定要刪除訂單 [{order_id}] 嗎？"): return
+        try:
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
+            df_new = df[df['訂單編號'] != order_id]
+            self._save_all_sheets(df_new, SHEET_TRACKING)
+            messagebox.showinfo("成功", "整筆訂單已刪除"); self.load_tracking_data()
+        except Exception as e: messagebox.showerror("錯誤", f"刪除失敗: {e}")
+
+    def action_track_return_order(self):
+        #""" 退貨整筆訂單 """
+        from tkinter import simpledialog
+        sel = self.tree_track.selection()
+        if not sel: return
+        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0]).replace("'", "")
+        reason = simpledialog.askstring("整筆退貨", "請輸入整筆退貨原因:", parent=self.root)
+        if reason is None: return
+        
+        try:
+            df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            mask = df_track['訂單編號'] == order_id
+            rows_to_return = df_track[mask].copy()
+            info = self._get_full_order_info(df_track, order_id)
+            for col, val in info.items(): rows_to_return[col] = val # 補齊資料
+            rows_to_return['備註'] = reason
+            
+            try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
+            except: df_returns = pd.DataFrame()
+            df_returns = pd.concat([df_returns, rows_to_return], ignore_index=True)
+            df_track_new = df_track[~mask]
+            
+            self._save_all_sheets_with_protect(df_track_new, SHEET_TRACKING, df_returns, SHEET_RETURNS)
+            messagebox.showinfo("成功", f"訂單 {order_id} 整筆已移至退貨。")
+            self.load_tracking_data(); self.load_returns_data()
+        except Exception as e: messagebox.showerror("錯誤", str(e))
+
+    def _save_all_sheets(self, df_target, target_sheet_name):
+        """ 輔助函式：保留其他分頁並儲存 (新增此函式) """
+        with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            df_target.to_excel(writer, sheet_name=target_sheet_name, index=False)
+            for sheet in [SHEET_SALES, SHEET_PRODUCTS, SHEET_RETURNS]:
+                if sheet != target_sheet_name:
+                    try:
+                        df = pd.read_excel(FILE_NAME, sheet_name=sheet)
+                        df.to_excel(writer, sheet_name=sheet, index=False)
+                    except:
+                        pd.DataFrame().to_excel(writer, sheet_name=sheet, index=False)
+
+
+    def setup_returns_tab(self):
+        """ 建立退貨紀錄查詢頁面 """
+        frame = self.tab_returns
+        
+        # 頂部控制
+        top_frame = ttk.Frame(frame, padding=5)
+        top_frame.pack(fill="x")
+        ttk.Label(top_frame, text="⚠️ 退貨紀錄為存證性質，不可於此處修改或刪除。", foreground="red").pack(side="left")
+        ttk.Button(top_frame, text="🔄 重新整理退貨清單", command=self.load_returns_data).pack(side="right")
+
+        # 列表 Treeview (多了一個「退貨原因」欄位)
+        cols = ("訂單編號", "日期", "買家", "商品名稱", "數量", "售價", "退貨原因")
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.tree_returns = ttk.Treeview(tree_frame, columns=cols, show='headings', height=20)
+        
+        # 設定標題與寬度
+        widths = {"訂單編號": 120, "日期": 90, "買家": 100, "商品名稱": 180, "數量": 50, "售價": 60, "退貨原因": 250}
+        for c in cols:
+            self.tree_returns.heading(c, text=c)
+            self.tree_returns.column(c, width=widths[c], anchor="w" if c != "數量" else "center")
+        
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_returns.yview)
+        self.tree_returns.configure(yscrollcommand=sb.set)
+        self.tree_returns.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        self.load_returns_data()
+
+    def load_returns_data(self):
+        """ 讀取『退貨紀錄』分頁的資料 """
+        for i in self.tree_returns.get_children():
+            self.tree_returns.delete(i)
+            
+        try:
+            if not os.path.exists(FILE_NAME): return
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
+            
+            # 格式化編號
+            if '訂單編號' in df.columns:
+                df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            
+            df = df.fillna("")
+            
+            # 填入 Treeview
+            for _, row in df.iterrows():
+                self.tree_returns.insert("", "end", values=(
+                    row.get('訂單編號', ''),
+                    row.get('日期', ''),
+                    row.get('買家名稱', ''),
+                    row.get('商品名稱', ''),
+                    row.get('數量', 0),
+                    row.get('單價(售)', 0),
+                    row.get('備註', '') # 對應 Excel Q 列的內容
+                ))
+        except Exception as e:
+            print(f"讀取退貨紀錄失敗: {e}")
     
-    #================= 銷售紀錄修改 (新功能) =================
+    #================= 銷售紀錄 =================
     def setup_sales_edit_tab(self):
         paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1288,6 +1562,179 @@ class SalesApp:
 
     # ---------------- 邏輯功能區 ----------------
 
+    def action_track_delete_item(self):
+        """ 刪除單一商品 (含表頭自動遞補邏輯) """
+        sel = self.tree_track.selection()
+        if not sel: return
+        
+        item = self.tree_track.item(sel[0])
+        idx = int(item['text']) # 取得 Excel 中的列索引 (Row Index)
+        order_id = str(item['values'][0]) # 取得訂單編號
+        prod_name = str(item['values'][4])
+
+        if not messagebox.askyesno("刪除商品", f"確定要從訂單 [{order_id}] 中\n刪除商品「{prod_name}」嗎？"):
+            return
+
+        try:
+            # 讀取完整資料
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            
+            # 確保訂單編號格式一致
+            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
+            
+            # --- [核心邏輯] 表頭遞補檢查 ---
+            # 1. 檢查要刪除的這行，是否包含重要資訊 (日期/買家)？
+            #    (即檢查它是否為該訂單的第一行/表頭)
+            is_header = pd.notna(df.at[idx, '日期']) or pd.notna(df.at[idx, '買家名稱'])
+            
+            if is_header:
+                # 2. 找出同一張訂單的其他商品 (排除掉自己)
+                # mask: 訂單編號相同 且 Index 不同
+                mask_others = (df['訂單編號'] == order_id) & (df.index != idx)
+                others_indices = df[mask_others].index.tolist()
+                
+                # 3. 如果還有其他商品，把表頭資訊移交給順位第一的商品
+                if others_indices:
+                    new_header_idx = others_indices[0] # 找到接班人
+                    
+                    # 需要移交的欄位
+                    cols_to_inherit = ['日期', '交易平台', '買家名稱', '寄送方式', '取貨地點', '扣費項目']
+                    
+                    for col in cols_to_inherit:
+                        # 把即將被刪除的資料 (idx) 複製給接班人 (new_header_idx)
+                        df.at[new_header_idx, col] = df.at[idx, col]
+                    
+                    print(f"表頭已從 row {idx} 轉移至 row {new_header_idx}")
+
+            # --- 刪除資料 ---
+            df.drop(idx, inplace=True)
+            
+            # 寫回 Excel (保留其他分頁)
+            self._save_all_sheets(df, SHEET_TRACKING)
+            
+            messagebox.showinfo("成功", "商品已刪除，訂單資料已自動修正。")
+            self.load_tracking_data()
+
+        except Exception as e:
+            messagebox.showerror("錯誤", f"刪除失敗: {e}")
+
+
+    def _get_full_order_info(self, df, order_id):
+        """ 輔助函式：從同一編號中找出有資料的列，回傳表頭資訊字典 """
+        subset = df[df['訂單編號'] == order_id]
+        # 找尋第一個日期不為空的列
+        headers = subset[subset['日期'].notna() & (subset['日期'] != "")]
+        if not headers.empty:
+            h = headers.iloc[0]
+            return {
+                '日期': h['日期'], '買家名稱': h['買家名稱'], 
+                '交易平台': h['交易平台'], '寄送方式': h['寄送方式'], 
+                '取貨地點': h['取貨地點']
+            }
+        return {}
+
+    def action_track_return_item(self):
+        """ 退貨單一商品 (含自動補足詳情與補位) """
+        from tkinter import simpledialog
+        sel = self.tree_track.selection()
+        if not sel: return
+        
+        item = self.tree_track.item(sel[0])
+        idx = int(item['text'])
+        order_id = str(item['values'][0]).replace("'", "")
+        prod_name = str(item['values'][4])
+
+        reason = simpledialog.askstring("退貨", f"商品: {prod_name}\n請輸入退貨原因:", parent=self.root)
+        if reason is None: return
+
+        try:
+            df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+
+            # 1. 取得這張訂單的完整資訊 (避免移走的是沒名字的那行)
+            info = self._get_full_order_info(df_track, order_id)
+            
+            # 2. 準備要移走的這行資料，並補滿詳情
+            row_to_move = df_track.loc[[idx]].copy()
+            for col, val in info.items():
+                row_to_move[col] = val
+            row_to_move['備註'] = reason
+
+            # 3. 處理追蹤表的補位邏輯
+            is_header = pd.notna(df_track.at[idx, '日期']) and str(df_track.at[idx, '日期']) != ""
+            if is_header:
+                others = df_track[(df_track['訂單編號'] == order_id) & (df_track.index != idx)].index.tolist()
+                if others:
+                    new_h = others[0]
+                    for col in info.keys(): df_track.at[new_h, col] = df_track.at[idx, col]
+
+            # 4. 執行移動
+            df_track.drop(idx, inplace=True)
+            try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
+            except: df_returns = pd.DataFrame()
+            df_returns = pd.concat([df_returns, row_to_move], ignore_index=True)
+
+            # 5. 存檔
+            self._save_all_sheets_with_protect(df_track, SHEET_TRACKING, df_returns, SHEET_RETURNS)
+            messagebox.showinfo("成功", f"商品「{prod_name}」已單獨移至退貨紀錄。")
+            self.load_tracking_data(); self.load_returns_data()
+        except Exception as e: messagebox.showerror("錯誤", str(e))
+
+    def action_track_complete_order(self):
+        """ 完成訂單 (整筆結案：移至銷售紀錄) """
+        sel = self.tree_track.selection()
+        if not sel: return
+        item = self.tree_track.item(sel[0])
+        order_id = str(item['values'][0]).replace("'", "")
+
+        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成出貨並收款？\n這將會把整筆訂單移至歷史銷售紀錄。"):
+            return
+
+        try:
+            df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+
+            # 1. 找出整筆訂單
+            mask = df_track['訂單編號'] == order_id
+            rows_to_finish = df_track[mask].copy()
+            
+            # 2. 為每一行補齊資訊 (歷史紀錄建議每行都完整，方便資料探勘)
+            info = self._get_full_order_info(df_track, order_id)
+            for col, val in info.items():
+                rows_to_finish[col] = val
+
+            # 3. 讀取並合併至銷售紀錄
+            df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
+            df_sales = pd.concat([df_sales, rows_to_finish], ignore_index=True)
+
+            # 4. 從追蹤表移除
+            df_track_new = df_track[~mask]
+
+            # 5. 存檔
+            self._save_all_sheets_with_protect(df_track_new, SHEET_TRACKING, df_sales, SHEET_SALES)
+            messagebox.showinfo("成功", f"訂單 {order_id} 已結案！")
+            self.load_tracking_data()
+        except Exception as e: messagebox.showerror("錯誤", str(e))
+
+    def _save_all_sheets_with_protect(self, df1, name1, df2, name2):
+        """ 萬用存檔輔助：寫入兩個變動的分頁，並保護其餘分頁與編號格式 """
+        # 保護編號
+        for df in [df1, df2]:
+            if '訂單編號' in df.columns:
+                df['訂單編號'] = df['訂單編號'].apply(lambda x: f"'{str(x).replace('\'','')}")
+
+        with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            df1.to_excel(writer, sheet_name=name1, index=False)
+            df2.to_excel(writer, sheet_name=name2, index=False)
+            # 保留沒變動的分頁
+            all_sheets = [SHEET_SALES, SHEET_TRACKING, SHEET_RETURNS, SHEET_PRODUCTS]
+            for s in all_sheets:
+                if s != name1 and s != name2:
+                    try:
+                        pd.read_excel(FILE_NAME, sheet_name=s).to_excel(writer, sheet_name=s, index=False)
+                    except: pass
+    
+
     def load_existing_tags(self, event=None):
         if not self.products_df.empty and "分類Tag" in self.products_df.columns:
             tags = self.products_df["分類Tag"].dropna().unique().tolist()
@@ -1533,8 +1980,11 @@ class SalesApp:
             # --- 寫入 Excel (銷售紀錄) ---
             df_sales_new = pd.DataFrame(rows)
             
-            # ★★★ [關鍵修正] 強制指定欄位順序，對齊 Excel ★★★
-            # 這是根據您截圖的順序排列的
+
+            # 在編號前面加上一個「'」(單引號)，這是 Excel 強制字串的暗號
+            df_sales_new['訂單編號'] = df_sales_new['訂單編號'].apply(lambda x: f"'{x}")
+
+
             excel_columns_order = [
                 "訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
                 "商品名稱", "數量", "單價(售)", "單價(進)", 
@@ -1545,28 +1995,50 @@ class SalesApp:
             df_sales_new = df_sales_new[excel_columns_order]
             # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
+# --- 寫入 Excel (商品資料分頁 - 更新庫存) ---
+            with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                df_prods_current = df_prods_current.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
+                df_prods_current.to_excel(writer, sheet_name='商品資料', index=False)
+
+            # --- 寫入 Excel (將新訂單寫入「訂單追蹤」而非銷售紀錄) ---
+            df_sales_new = pd.DataFrame(rows)
+            
+            # 強制指定欄位順序 (確保 Excel 格式正確)
+            excel_columns_order = [
+                "訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
+                "商品名稱", "數量", "單價(售)", "單價(進)", 
+                "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
+            ]
+            df_sales_new = df_sales_new[excel_columns_order]
+
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                # 【修正點】：將 sheet_name 改為 SHEET_TRACKING
                 try:
-                    df_ex = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+                    df_ex = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
                     start_row = len(df_ex) + 1
                     header = False
                 except:
+                    # 如果分頁是空的或不存在
                     start_row = 0
                     header = True
                 
-                df_sales_new.to_excel(writer, sheet_name='銷售紀錄', index=False, header=header, startrow=start_row)
+                df_sales_new.to_excel(writer, sheet_name=SHEET_TRACKING, index=False, header=header, startrow=start_row)
 
-            # 更新介面
+            # --- 更新介面資料 ---
             self.products_df = df_prods_current
             self.update_sales_prod_list()
             self.update_mgmt_prod_list()
+            
+            # 【新增】：儲存後立刻重新讀取追蹤列表，讓緩衝區出現新資料
+            self.load_tracking_data() 
 
-            msg = f"訂單 {order_id} 已儲存！\n欄位順序已校正。"
+            msg = f"訂單 {order_id} 已送至「訂單追蹤」緩衝區！\n庫存已預先扣除。"
             if out_of_stock_warnings:
                 msg += "\n\n⚠️ 注意！以下商品已售完或庫存不足：\n" + "\n".join(out_of_stock_warnings)
             
             messagebox.showinfo("成功", msg)
 
+            # 清空購物車欄位
             self.cart_data = []
             for i in self.tree.get_children(): self.tree.delete(i)
             self.update_totals()
