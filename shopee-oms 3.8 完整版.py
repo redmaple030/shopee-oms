@@ -1,4 +1,4 @@
-#shopee-oms 3.6 完整版
+#shopee-oms 3.8 完整版
 
 import json
 import sys
@@ -11,8 +11,6 @@ import re
 import pickle
 import threading 
 import hashlib
-
-
 
 
 # 1. 匯入敏感資料
@@ -55,6 +53,8 @@ SHEET_SALES = '銷售紀錄'      # 歷史已完成訂單
 SHEET_TRACKING = '訂單追蹤'   # 未完成/出貨中 (緩衝區)
 SHEET_RETURNS = '退貨紀錄'    # 退貨區
 SHEET_PRODUCTS = '商品資料'
+SHEET_CONFIG = '系統設定'
+
 
 # 設定雲端硬碟上的備份資料夾名稱
 BACKUP_FOLDER_NAME = "蝦皮進銷存系統_備份"
@@ -152,22 +152,35 @@ class GoogleDriveSync:
             return None
 
     def upload_file(self, filepath):
-        """上傳檔案到指定資料夾"""
+        """上傳檔案到指定資料夾，並維持最多 10 筆備份"""
         if not self.is_authenticated: return False, "尚未登入 Google 帳號"
         if not self.folder_id: self.folder_id = self.get_or_create_folder()
 
         try:
+            # 1. 執行上傳
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
             file_name = f"[系統備份] {os.path.basename(filepath).replace('.xlsx', '')}_{timestamp}.xlsx"
             
-            file_metadata = {
-                'name': file_name,
-                'parents': [self.folder_id] 
-            }
+            file_metadata = {'name': file_name, 'parents': [self.folder_id]}
             media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+            # 2. 檢查檔案數量並自動清理舊檔 (自動替換邏輯)
+            # list_backups 預設是照時間降冪排序 (最新的在 index 0)
+            items = self.list_backups()
             
-            file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            return True, f"備份成功！\n雲端檔名: {file_name}\n位置: {BACKUP_FOLDER_NAME}"
+            if len(items) > 10:
+                # 取得第 11 筆之後的所有檔案 (即最舊的檔案們)
+                files_to_delete = items[10:] 
+                for old_file in files_to_delete:
+                    file_id = old_file.get('id')
+                    try:
+                        self.service.files().delete(fileId=file_id).execute()
+                        print(f"自動清理舊備份: {old_file.get('name')}")
+                    except Exception as delete_error:
+                        print(f"刪除舊檔失敗: {delete_error}")
+
+            return True, f"備份成功！\n雲端檔名: {file_name}\n(系統已自動保留最新 10 筆紀錄)"
         except Exception as e:
             return False, f"上傳失敗: {str(e)}"
 
@@ -208,7 +221,7 @@ class SalesApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("蝦皮/網拍進銷存系統 (V3.6 時區修正版)")
+        self.root.title("蝦皮/網拍進銷存系統 (V3.8 完整版)")
         self.root.geometry("1280x850") 
 
         # --- 字型設定 ---
@@ -286,41 +299,32 @@ class SalesApp:
 
 
     def check_excel_file(self):
+            cols_sales = ["訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點", 
+                      "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"]
+            cols_config = ["設定名稱", "費率百分比"]
+            default_fees = [["一般賣家-平日", 14.5], ["一般賣家-大促", 16.5], ["免運賣家", 19.5], ["自訂費率", 10.0]]
+    
             if not os.path.exists(FILE_NAME):
                 try:
                     with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                        cols_sales = [
-                            "訂單編號", "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
-                            "商品名稱", "數量", "單價(售)", "單價(進)", 
-                            "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
-                        ]
-                        # 建立四個分頁
                         pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_SALES, index=False)
-                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False) # 新增
-                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)  # 新增
-                        
-                        cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"]
-                        df_prods = pd.DataFrame(columns=cols_prods)
-                        df_prods.loc[0] = ["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]
+                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
+                        pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
+                        # 建立商品範例
+                        df_prods = pd.DataFrame([["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]], 
+                                                columns=["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"])
                         df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
+                        # 建立預設費率
+                        pd.DataFrame(default_fees, columns=cols_config).to_excel(writer, sheet_name=SHEET_CONFIG, index=False)
                 except Exception as e:
-                    messagebox.showerror("錯誤", f"無法建立 Excel 檔案: {e}")
-            else:
-                # 如果檔案已存在，檢查是否缺少新分頁，若缺少則補上
-                try:
-                    with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                        wb = writer.book
-                        cols_sales = [
-                            "訂單編號", "日期", "交易平台", "買家名稱", "寄送方式", "取貨地點", 
-                            "商品名稱", "數量", "單價(售)", "單價(進)", 
-                            "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"
-                        ]
-                        if SHEET_TRACKING not in wb.sheetnames:
-                            pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
-                        if SHEET_RETURNS not in wb.sheetnames:
-                            pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
-                except:
-                    pass # 忽略錯誤，可能是正在開啟中
+                    messagebox.showerror("錯誤", f"無法建立 Excel: {e}")
+                else:
+                    # 檢查是否缺少設定分頁
+                    try:
+                        with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                            if SHEET_CONFIG not in writer.book.sheetnames:
+                                pd.DataFrame(default_fees, columns=cols_config).to_excel(writer, sheet_name=SHEET_CONFIG, index=False)
+                    except: pass
 
     def load_products(self):
         try:
@@ -358,6 +362,7 @@ class SalesApp:
         
         tab_control.pack(expand=1, fill="both")
         
+        self.setup_about_tab()   
         self.setup_sales_tab()
         self.setup_tracking_tab()
         self.setup_returns_tab()
@@ -365,7 +370,6 @@ class SalesApp:
         self.setup_product_tab()
         self.setup_analysis_tab()
         self.setup_backup_tab() 
-        self.setup_about_tab()
 
 
 
@@ -934,9 +938,16 @@ class SalesApp:
         self.combo_fee_rate.set("一般賣家-平日 (14.5%)") 
         self.combo_fee_rate.bind('<<ComboboxSelected>>', self.on_fee_option_selected)
         self.combo_fee_rate.bind('<KeyRelease>', self.update_totals_event)
-        
+
+        self.var_tax_enabled = tk.BooleanVar(value=False)
+
+
         f2 = ttk.Frame(fee_frame)
         f2.pack(fill="x", pady=5)
+
+        self.var_tax_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f2, text="開發票(5%稅)", variable=self.var_tax_enabled, command=self.update_totals).pack(side="left", padx=5)
+
         
         tag_opts = ["", "活動費", "運費補貼", "補償金額", "私人預定", "補寄補貼", "固定成本"]
         self.combo_tag = ttk.Combobox(f2, textvariable=self.var_fee_tag, values=tag_opts, state="readonly", width=12)
@@ -961,6 +972,9 @@ class SalesApp:
         self.lbl_income.pack(anchor="w")
 
         ttk.Button(sum_frame, text="✔ 送出訂單", command=self.submit_order).pack(fill="x", pady=5)
+
+        self.refresh_fee_tree()
+
 
 
     def setup_product_tab(self):
@@ -1533,31 +1547,162 @@ class SalesApp:
 
 
     def setup_about_tab(self):
-        frame = ttk.Frame(self.tab_about, padding=40)
-        frame.pack(expand=True, fill="both")
+        """ 設定分頁：包含字體設定與費率清單管理 """
+        # 使用 Canvas 加上 Scrollbar 以防內容過多
+        main_frame = ttk.Frame(self.tab_about, padding=20)
+        main_frame.pack(fill="both", expand=True)
 
-        font_frame = ttk.LabelFrame(frame, text="介面顯示設定 (字體放大)", padding=15)
+        # --- 第一區：顯示設定 ---
+        font_frame = ttk.LabelFrame(main_frame, text="🎨 介面顯示設定", padding=15)
         font_frame.pack(fill="x", pady=10)
-        
-        ttk.Label(font_frame, text="調整字型大小 (10-20):").pack(side="left", padx=5)
+        ttk.Label(font_frame, text="字型大小 (10-20):").pack(side="left", padx=5)
         spin = ttk.Spinbox(font_frame, from_=10, to=20, textvariable=self.var_font_size, width=5, command=self.change_font_size)
         spin.pack(side="left", padx=5)
-        spin.bind('<KeyRelease>', self.change_font_size)
-        
-        ttk.Label(font_frame, text="(調整後表格行高會自動變更)", foreground="gray").pack(side="left", padx=10)
+        ttk.Label(font_frame, text="(調整後需重啟或切換分頁生效)", foreground="gray").pack(side="left", padx=10)
 
+        # --- 第二區：自訂費率管理 (核心功能) ---
+        fee_mgmt_frame = ttk.LabelFrame(main_frame, text="💰 銷售費率清單管理 (儲存於 Excel)", padding=15)
+        fee_mgmt_frame.pack(fill="both", expand=True, pady=10)
 
+        # 左側清單
+        list_frame = ttk.Frame(fee_mgmt_frame)
+        list_frame.pack(side="left", fill="both", expand=True)
+        
+        self.fee_tree = ttk.Treeview(list_frame, columns=("名稱", "百分比"), show='headings', height=8)
+        self.fee_tree.heading("名稱", text="費率名稱")
+        self.fee_tree.heading("百分比", text="費率 (%)")
+        self.fee_tree.column("百分比", width=80, anchor="center")
+        self.fee_tree.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="關於本軟體", font=("微軟正黑體", 20, "bold")).pack(pady=10)
-        intro_text = "本系統專為個人賣家設計，整合進銷存管理與蝦皮費用試算。\n\n[新增功能]\n1. Google 雲端備份 (多執行緒不卡頓)\n2. 自動建立專屬備份資料夾\n3. 字體大小調整 (長輩友善)\n4. 備份時間自動修正為台灣時間"
-        ttk.Label(frame, text=intro_text, font=("微軟正黑體", 12), justify="center").pack(pady=20)
+        # 右側控制按鈕
+        ctrl_frame = ttk.Frame(fee_mgmt_frame, padding=10)
+        ctrl_frame.pack(side="right", fill="y")
+
+        ttk.Label(ctrl_frame, text="名稱:").pack(anchor="w")
+        self.ent_fee_name = ttk.Entry(ctrl_frame, width=15)
+        self.ent_fee_name.pack(pady=5)
+
+        ttk.Label(ctrl_frame, text="費率 (%):").pack(anchor="w")
+        self.ent_fee_val = ttk.Entry(ctrl_frame, width=15)
+        self.ent_fee_val.pack(pady=5)
+
+        ttk.Button(ctrl_frame, text="➕ 新增/更新", command=self.action_add_custom_fee).pack(fill="x", pady=5)
+        ttk.Button(ctrl_frame, text="🗑️ 刪除選取", command=self.action_delete_custom_fee).pack(fill="x", pady=5)
+        ttk.Label(ctrl_frame, text="*修改後銷售頁面\n選單會同步更新", foreground="gray", font=("", 9)).pack(pady=10)
+
+        # 載入初始費率資料
+        self.refresh_fee_tree()
+
+    def refresh_fee_tree(self):
+        """ 刷新設定頁面的 Treeview 並同步更新銷售頁面的 Combobox (修正版：加入安全檢查) """
         
-        contact_frame = ttk.LabelFrame(frame, text="聯絡資訊", padding=20)
-        contact_frame.pack(fill="x", padx=50, pady=10)
-        ttk.Label(contact_frame, text="程式設計者: redmaple", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
-        ttk.Label(contact_frame, text="聯絡信箱: az062596216@gmail.com", font=("微軟正黑體", 11)).pack(anchor="w", pady=5)
+        # 【修正點 1】：檢查 fee_tree 是否已經被 setup_about_tab 建立
+        if hasattr(self, 'fee_tree'):
+            for i in self.fee_tree.get_children(): 
+                self.fee_tree.delete(i)
+
+        try:
+            # 讀取 Excel 內的費率設定
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+            fee_options = ["自訂手動輸入"]
+            
+            for _, row in df.iterrows():
+                name, val = row['設定名稱'], row['費率百分比']
+                
+                # 【修正點 2】：只有當介面物件存在時才插入資料到列表
+                if hasattr(self, 'fee_tree'):
+                    self.fee_tree.insert("", "end", values=(name, val))
+                
+                # 組合出顯示在下拉選單的文字：例如 "一般賣家 (14.5%)"
+                fee_options.append(f"{name} ({val}%)")
+            
+            # 同步更新銷售輸入頁面的 Combobox (如果它存在的話)
+            if hasattr(self, 'combo_fee_rate'):
+                self.combo_fee_rate['values'] = fee_options
+        except Exception as e:
+            print(f"讀取費率失敗: {e}")
+
+    def action_add_custom_fee(self):
+        name = self.ent_fee_name.get().strip()
+        raw_val = self.ent_fee_val.get().strip()
         
-        ttk.Label(frame, text="Version 3.6 (Timezone Fix)", foreground="gray").pack(side="bottom", pady=20)
+        if not name or not raw_val:
+            messagebox.showwarning("警告", "請輸入名稱與費率")
+            return
+
+        try:
+            clean_val = raw_val.replace("%", "")
+            val = float(clean_val)
+        except ValueError:
+            messagebox.showerror("錯誤", f"費率「{raw_val}」不是有效數字")
+            return
+
+        try:
+            # --- [修正開始] 強大讀取邏輯 ---
+            target_cols = ["設定名稱", "費率百分比"]
+            try:
+                # 嘗試讀取現有的設定
+                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                
+                # 如果讀進來的欄位不對，強制重設
+                if '設定名稱' not in df.columns:
+                    df = pd.DataFrame(columns=target_cols)
+            except Exception:
+                # 如果分頁不存在或讀取失敗，建立新的
+                df = pd.DataFrame(columns=target_cols)
+            # --- [修正結束] ---
+
+            # 如果名稱重複則更新，不重複則新增
+            if not df.empty and name in df['設定名稱'].values:
+                df.loc[df['設定名稱'] == name, '費率百分比'] = val
+            else:
+                new_row = pd.DataFrame([[name, val]], columns=target_cols)
+                df = pd.concat([df, new_row], ignore_index=True)
+            
+            # 存回 Excel
+            self._save_config_to_excel(df)
+            self.refresh_fee_tree()
+            
+            # 清空輸入框
+            self.ent_fee_name.delete(0, tk.END)
+            self.ent_fee_val.delete(0, tk.END)
+            messagebox.showinfo("成功", f"費率「{name}」已儲存。")
+            
+        except Exception as e:
+            messagebox.showerror("儲存失敗", f"發生錯誤: {str(e)}")
+
+    def action_delete_custom_fee(self):
+        sel = self.fee_tree.selection()
+        if not sel: return
+        name = self.fee_tree.item(sel[0])['values'][0]
+        
+        try:
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+            df = df[df['設定名稱'] != name]
+            self._save_config_to_excel(df)
+            self.refresh_fee_tree()
+        except Exception as e: messagebox.showerror("錯誤", str(e))
+
+    def _save_config_to_excel(self, df_config):
+        """ 專門儲存設定分頁的輔助函式 (強化安全版) """
+        try:
+            # 1. 先讀取目前 Excel 裡所有的分頁，確保等等寫入時不會弄丟
+            with pd.ExcelFile(FILE_NAME) as xls:
+                sheet_names = xls.sheet_names
+                all_data = {sn: pd.read_excel(xls, sheet_name=sn) for sn in sheet_names}
+            
+            # 2. 將我們要更新的「系統設定」放進資料字典中
+            all_data[SHEET_CONFIG] = df_config
+
+            # 3. 一次性全部寫回 Excel
+            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
+                for sn, df in all_data.items():
+                    df.to_excel(writer, sheet_name=sn, index=False)
+                    
+        except PermissionError:
+            messagebox.showerror("錯誤", "Excel 檔案被開啟中，請先關閉 Excel 再按儲存！")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"存檔過程出錯: {str(e)}")
 
     # ---------------- 邏輯功能區 ----------------
 
@@ -1617,10 +1762,12 @@ class SalesApp:
         except Exception as e:
             messagebox.showerror("錯誤", f"刪除失敗: {e}")
 
-
     def _get_full_order_info(self, df, order_id):
         """ 輔助函式：從同一編號中找出有資料的列，回傳表頭資訊字典 """
-        subset = df[df['訂單編號'] == order_id]
+        # 確保 order_id 是乾淨的字串
+        clean_id = str(order_id).replace("'", "")
+        subset = df[df['訂單編號'].astype(str).str.contains(clean_id)]
+        
         # 找尋第一個日期不為空的列
         headers = subset[subset['日期'].notna() & (subset['日期'] != "")]
         if not headers.empty:
@@ -1631,7 +1778,6 @@ class SalesApp:
                 '取貨地點': h['取貨地點']
             }
         return {}
-
     def action_track_return_item(self):
         """ 退貨單一商品 (含自動補足詳情與補位) """
         from tkinter import simpledialog
@@ -1853,30 +1999,56 @@ class SalesApp:
     
     def update_totals(self):
         try:
+            # 1. 總銷售額 (Revenue) 與 商品總進貨成本 (COGS)
             t_sales = sum(i['total_sales'] for i in self.cart_data)
             t_cost = sum(i['total_cost'] for i in self.cart_data)
             
+            # 2. 解析平台手續費率 (例如 14.5%)
             raw_rate = self.var_fee_rate_str.get()
             rate = 0.0
-            try: rate = float(raw_rate)
+            try: 
+                rate = float(raw_rate)
             except ValueError:
                 match = re.search(r"\((\d+\.?\d*)%\)", raw_rate)
                 rate = float(match.group(1)) if match else 0.0
 
-            try: extra = float(self.var_extra_fee.get())
-            except: extra = 0.0
+            # 3. 取得其他額外扣費 (廣告、補貼等)
+            try: 
+                extra = float(self.var_extra_fee.get())
+            except: 
+                extra = 0.0
             
-            fee = (t_sales * (rate/100)) + extra
-            income = t_sales - fee
-            profit = income - t_cost
+            # 4. 計算平台收走的手續費
+            platform_fee = (t_sales * (rate/100)) + extra
             
-            self.lbl_gross.config(text=f"總金額: ${t_sales:,.0f}")
-            self.lbl_fee.config(text=f"扣費: -${fee:,.1f}")
-            self.lbl_income.config(text=f"預估入帳: ${income:,.1f}")
-            self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
-            return t_sales, fee
-        except: return 0, 0
+            # 5. 【關鍵修正：營業稅】
+            # 直接以「銷售總額」乘以 5% 計算應繳稅金
+            tax_amount = 0
+            if hasattr(self, 'var_tax_enabled') and self.var_tax_enabled.get():
+                tax_amount = t_sales * 0.05  # 正確：總額的 5%
 
+            # 6. 計算預估入帳 (平台撥給您的金額 = 總額 - 平台費)
+            income = t_sales - platform_fee
+
+            # 7. 【關鍵修正：實收淨利】
+            # 公式：總營收 - 平台費 - 營業稅 - 商品成本
+            profit = t_sales - platform_fee - tax_amount - t_cost
+            
+            # 8. 更新介面顯示
+            self.lbl_gross.config(text=f"總金額: ${t_sales:,.0f}")
+            self.lbl_fee.config(text=f"平台扣費: -${platform_fee:,.1f}")
+            self.lbl_income.config(text=f"預估入帳(平台撥款): ${income:,.1f}")
+
+            if tax_amount > 0:
+                # 這裡清楚標示營業稅是基於銷售額產生的
+                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f} (營業稅: -${tax_amount:,.0f})")
+            else:
+                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
+
+            return t_sales, platform_fee
+        except: 
+            return 0, 0
+        
     def submit_order(self):
         if not self.cart_data: return
         
@@ -2176,5 +2348,3 @@ if __name__ == "__main__":
     app = SalesApp(root)
     root.mainloop()
     root.mainloop()
-
-
