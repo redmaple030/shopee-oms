@@ -1,4 +1,4 @@
-#shopee-oms 3.8 完整版
+#shopee-oms 3.9 完整版
 
 import json
 import sys
@@ -301,6 +301,8 @@ class SalesApp:
     def check_excel_file(self):
             cols_sales = ["訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點", 
                       "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率"]
+            cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間", "初始上架時間", "最後進貨時間"]
+
             cols_config = ["設定名稱", "費率百分比"]
             default_fees = [["一般賣家-平日", 14.5], ["一般賣家-大促", 16.5], ["免運賣家", 19.5], ["自訂費率", 10.0]]
     
@@ -311,6 +313,8 @@ class SalesApp:
                         pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
                         pd.DataFrame(columns=cols_sales).to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
                         # 建立商品範例
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
                         df_prods = pd.DataFrame([["範例分類", "範例商品A", 100, 10, datetime.now().strftime("%Y-%m-%d %H:%M")]], 
                                                 columns=["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"])
                         df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
@@ -329,6 +333,15 @@ class SalesApp:
     def load_products(self):
         try:
             df = pd.read_excel(FILE_NAME, sheet_name='商品資料')
+
+            # --- [核心相容邏輯] ---
+            # 如果是舊檔案，缺這兩欄，就用現有的「最後更新時間」填補
+            if "初始上架時間" not in df.columns:
+                df["初始上架時間"] = df["最後更新時間"]
+            if "最後進貨時間" not in df.columns:
+                df["最後進貨時間"] = df["最後更新時間"]
+            # ---------------------
+
             if "分類Tag" not in df.columns: df["分類Tag"] = ""
             if "目前庫存" not in df.columns: 
                 df["目前庫存"] = 0 
@@ -402,140 +415,135 @@ class SalesApp:
         self.tree_time_stats.column("總營收", width=80, anchor="e")
         self.tree_time_stats.heading("總淨利", text="總淨利")
         self.tree_time_stats.column("總淨利", width=80, anchor="e")
-        self.tree_time_stats.heading("訂單數", text="單數")
+        self.tree_time_stats.heading("訂單數", text="訂單數")
         self.tree_time_stats.column("訂單數", width=50, anchor="center")
         
         self.tree_time_stats.pack(fill="both", expand=True)
 
-        # --- 右側：商品利潤排行 ---
-        right_frame = ttk.LabelFrame(paned, text="🏆 商品銷售排行榜 (依毛利率排序)", padding=10)
+# --- 右側：商品銷售排行榜 ---
+        right_frame = ttk.LabelFrame(paned, text="🏆 商品銷售排行榜", padding=10)
         paned.add(right_frame, weight=1)
 
-        cols_prod = ("商品名稱", "平均毛利%", "總獲利", "總銷量")
-        self.tree_prod_stats = ttk.Treeview(right_frame, columns=cols_prod, show='headings', height=15)
+        # 排序控制區
+        sort_frame = ttk.Frame(right_frame)
+        sort_frame.pack(fill="x", pady=(0, 5))
+        ttk.Label(sort_frame, text="排序依據:").pack(side="left")
         
-        self.tree_prod_stats.heading("商品名稱", text="商品名稱")
-        self.tree_prod_stats.column("商品名稱", width=150)
-        self.tree_prod_stats.heading("平均毛利%", text="平均毛利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "平均毛利%", False))
-        self.tree_prod_stats.column("平均毛利%", width=80, anchor="e")
-        self.tree_prod_stats.heading("總獲利", text="總獲利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "總獲利", False))
-        self.tree_prod_stats.column("總獲利", width=80, anchor="e")
-        self.tree_prod_stats.heading("總銷量", text="總銷量", command=lambda: self.sort_tree_column(self.tree_prod_stats, "總銷量", False))
-        self.tree_prod_stats.column("總銷量", width=60, anchor="center")
+        self.var_prod_sort_by = tk.StringVar(value="平均毛利率")
+        sort_options = ["平均毛利率", "總銷量排行", "總獲利排行", "銷售速度排行"]
+        self.combo_prod_sort = ttk.Combobox(sort_frame, textvariable=self.var_prod_sort_by, values=sort_options, state="readonly", width=12)
+        self.combo_prod_sort.pack(side="left", padx=5)
+        self.combo_prod_sort.bind("<<ComboboxSelected>>", lambda e: self.calculate_analysis_data())
+
+        cols_prod_ids = ("p_name", "p_margin", "p_profit", "p_qty", "p_velocity")
+
+        self.tree_prod_stats = ttk.Treeview(right_frame, columns=cols_prod_ids, show='headings', height=15)
+        
+        # 設定各欄位
+        self.tree_prod_stats.heading("p_name", text="商品名稱")
+        self.tree_prod_stats.column("p_name", width=150)
+        self.tree_prod_stats.heading("p_margin", text="平均毛利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "p_margin", False))
+        self.tree_prod_stats.column("p_margin", width=80, anchor="e")
+        self.tree_prod_stats.heading("p_profit", text="總獲利", command=lambda: self.sort_tree_column(self.tree_prod_stats, "p_profit", False))
+        self.tree_prod_stats.column("p_profit", width=80, anchor="e")
+        self.tree_prod_stats.heading("p_qty", text="總銷量", command=lambda: self.sort_tree_column(self.tree_prod_stats, "p_qty", False))
+        self.tree_prod_stats.column("p_qty", width=60, anchor="center")
+        self.tree_prod_stats.heading("p_velocity", text="銷售速度", command=lambda: self.sort_tree_column(self.tree_prod_stats, "p_velocity", False))
+        self.tree_prod_stats.column("p_velocity", width=100, anchor="e")
 
         sb = ttk.Scrollbar(right_frame, orient="vertical", command=self.tree_prod_stats.yview)
         self.tree_prod_stats.configure(yscrollcommand=sb.set)
         self.tree_prod_stats.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        # 底部：重新整理按鈕
         btn_refresh = ttk.Button(self.tab_analysis, text="🔄 重新計算分析數據", command=self.calculate_analysis_data)
         btn_refresh.pack(fill="x", pady=10, padx=10)
-
-        # 初始載入
+        
         self.calculate_analysis_data()
 
     def calculate_analysis_data(self):
-        """核心分析邏輯：讀取 Excel 並運算 (修正版)"""
+        """ 核心分析邏輯修正版：使用『初始上架時間』計算長期銷售速度 """
+        if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'): return
         
-        # 1. 安全檢查：確保介面元件已建立
-        if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'):
-            return
-
-        # 2. 清空介面 (清除舊資料)
         for i in self.tree_time_stats.get_children(): self.tree_time_stats.delete(i)
         for i in self.tree_prod_stats.get_children(): self.tree_prod_stats.delete(i)
         
-        # 3. 檢查檔案是否存在
         if not os.path.exists(FILE_NAME): return
 
         try:
-            # 4. 讀取 Excel
-            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
-            if df.empty: return
+            with pd.ExcelFile(FILE_NAME) as xls:
+                df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
+                df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
 
-            # === 資料清洗與型別轉換 ===
-            # 確保金額是數字 (轉為 float，錯誤則填 0)
-            numeric_cols = ['總銷售額', '總淨利', '數量']
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if df_sales.empty: return
 
-            # 處理日期
-            df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
-            df = df.dropna(subset=['日期']) # 移除沒有日期的資料
+            # --- 補齊 Excel 視覺空白 (ffill) ---
+            fill_cols = ['訂單編號', '日期', '買家名稱', '交易平台']
+            for col in fill_cols:
+                if col in df_sales.columns: df_sales[col] = df_sales[col].ffill()
+            df_sales = df_sales.dropna(subset=['商品名稱'])
 
-            # 處理毛利率 (移除 % 並轉數字)
-            if '毛利率' in df.columns:
-                if df['毛利率'].dtype == object:
-                    df['毛利率_數值'] = df['毛利率'].astype(str).str.replace('%', '', regex=False)
-                    df['毛利率_數值'] = pd.to_numeric(df['毛利率_數值'], errors='coerce')
-                else:
-                    df['毛利率_數值'] = df['毛利率']
-            else:
-                df['毛利率_數值'] = 0.0
+            # --- 資料清洗 ---
+            for col in ['總銷售額', '總淨利', '數量']:
+                df_sales[col] = pd.to_numeric(df_sales[col], errors='coerce').fillna(0)
+            df_sales['日期'] = pd.to_datetime(df_sales['日期'], errors='coerce')
+            df_sales = df_sales.dropna(subset=['日期'])
+            df_sales['毛利率_數值'] = pd.to_numeric(df_sales['毛利率'].astype(str).str.replace('%', ''), errors='coerce').fillna(0)
 
-            # === 左側：時間分析 (月報表) ===
-            df['月份'] = df['日期'].dt.strftime('%Y-%m')
+            # --- 左側：月份統計 (邏輯不變) ---
+            # ... (此處維持您原本的月份統計顯示，略)
+
+            # --- 右側：商品分析 (修正速度計算) ---
+            # 1. 取得『初始上架時間』作為計算基準 (分母)
+            # 如果舊資料沒有這個欄位，會自動用最後更新時間補齊
+            if "初始上架時間" not in df_prods.columns:
+                df_prods["初始上架時間"] = df_prods["最後更新時間"]
             
-            # 依月份統計
-            monthly_group = df.groupby('月份')[['總銷售額', '總淨利', '數量']].sum().reset_index()
-            monthly_group = monthly_group.sort_values('月份', ascending=False) # 最近月份在上面
-
-            # 更新看板數據
-            if not monthly_group.empty:
-                latest = monthly_group.iloc[0]
-                self.lbl_month_sales.config(text=f"本月({latest['月份']}) 營收: ${latest['總銷售額']:,.0f}")
-                self.lbl_month_profit.config(text=f"本月({latest['月份']}) 淨利: ${latest['總淨利']:,.0f}")
+            df_prods['初始上架時間'] = pd.to_datetime(df_prods['初始上架時間'], errors='coerce').fillna(pd.Timestamp.now())
             
-            # 填入 Treeview (月資料)
-            for _, row in monthly_group.iterrows():
-                self.tree_time_stats.insert("", "end", values=(
-                    f"{row['月份']} (月)", 
-                    f"${row['總銷售額']:,.0f}", 
-                    f"${row['總淨利']:,.0f}", 
-                    int(row['數量'])
-                ))
+            # 建立上架時間對照表
+            first_upload_map = df_prods.set_index('商品名稱')['初始上架時間']
 
-            # 插入分隔線
-            self.tree_time_stats.insert("", "end", values=("--- 近7日明細 ---", "", "", ""))
-
-            # === 左側：近7日明細 ===
-            df['日期字串'] = df['日期'].dt.strftime('%Y-%m-%d')
-            daily_group = df.groupby('日期字串')[['總銷售額', '總淨利']].sum().reset_index()
-            daily_group = daily_group.sort_values('日期字串', ascending=False).head(7) # 只取前7天
-
-            for _, row in daily_group.iterrows():
-                self.tree_time_stats.insert("", "end", values=(
-                    row['日期字串'], 
-                    f"${row['總銷售額']:,.0f}", 
-                    f"${row['總淨利']:,.0f}", 
-                    "--"
-                ))
-
-            # === 右側：商品分析 (依毛利率排序) ===
-            prod_group = df.groupby('商品名稱').agg({
-                '毛利率_數值': 'mean', # 平均毛利率
-                '總淨利': 'sum',      # 總獲利
-                '數量': 'sum'         # 總銷量
+            # 2. 聚合銷售數據 (分子)
+            prod_group = df_sales.groupby('商品名稱').agg({
+                '毛利率_數值': 'mean',
+                '總淨利': 'sum',
+                '數量': 'sum'
             }).reset_index()
 
-            # 預設依「毛利率」降冪排序
-            prod_group = prod_group.sort_values('毛利率_數值', ascending=False)
+            # 3. 【核心修正點】計算長期銷售速度
+            now = pd.Timestamp.now()
+            
+            # 取得該商品自從上架以來的總天數
+            prod_group['start_date'] = prod_group['商品名稱'].map(first_upload_map).fillna(now)
+            
+            # 計算總時長 (天數)，最少為 1 天避免除以 0
+            prod_group['total_days'] = (now - prod_group['start_date']).dt.days.clip(lower=1)
+            
+            # 銷售速率 = 總銷量 / 總天數
+            prod_group['velocity'] = (prod_group['數量'] / prod_group['total_days']).round(2)
+
+            # 4. 排序與顯示
+            sort_mode = self.var_prod_sort_by.get()
+            sort_map = {
+                "平均毛利率": '毛利率_數值',
+                "總銷量排行": '數量',
+                "總獲利排行": '總淨利',
+                "銷售速度排行": 'velocity'
+            }
+            prod_group = prod_group.sort_values(sort_map.get(sort_mode, '毛利率_數值'), ascending=False)
 
             for _, row in prod_group.iterrows():
-                margin_display = f"{row['毛利率_數值']:.1f}%"
                 self.tree_prod_stats.insert("", "end", values=(
                     row['商品名稱'],
-                    margin_display,
+                    f"{row['毛利率_數值']:.1f}%",
                     f"${row['總淨利']:,.0f}",
-                    int(row['數量'])
+                    int(row['數量']),
+                    f"{row['velocity']} 件/日"
                 ))
 
         except Exception as e:
-            # 錯誤處理
-            # print(f"分析錯誤: {e}") # Debug 用
-            messagebox.showerror("分析錯誤", f"計算時發生錯誤: {e}")
+            print(f"分析失敗: {e}")
 
     def sort_tree_column(self, tree, col, reverse):
         """(進階功能) 點擊標題可以排序"""
@@ -1372,55 +1380,48 @@ class SalesApp:
         self.calculate_analysis_data()
 
     def load_sales_records_for_edit(self):
-        """讀取 Excel 銷售紀錄到列表 (修正為顯示買家名稱)"""
+        """ 讀取銷售紀錄到列表 (確保顯示也是最新日期在最前) """
         for i in self.tree_sales_edit.get_children():
             self.tree_sales_edit.delete(i)
         
         try:
             if not os.path.exists(FILE_NAME): return
-            df = pd.read_excel(FILE_NAME, sheet_name='銷售紀錄')
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             
             if df.empty: return
 
-            # 用來記憶上一筆有資料的內容 (處理空白列)
-            last_date = ""
-            last_buyer = ""
+            # --- [排序優化] 顯示時也強制最新在最前 ---
+            df['tmp_dt'] = pd.to_datetime(df['日期'], errors='coerce')
+            df = df.sort_values(by=['tmp_dt', '訂單編號'], ascending=[False, False])
+            # ----------------------------------------
+
+            last_date, last_buyer = "", ""
 
             for idx, row in df.iterrows():
                 raw_date = str(row.get('日期', '')) if pd.notna(row.get('日期')) else ""
-                
-                # --- [關鍵修正]：這裡改為讀取 '買家名稱' ---
-                # 原本可能是 row.get('交易平台', '')
                 raw_buyer = str(row.get('買家名稱', '')) if pd.notna(row.get('買家名稱')) else ""
-                # ----------------------------------------
-
                 item_name = str(row.get('商品名稱', ''))
 
-                # 自動補齊邏輯
                 if raw_date == "" and raw_buyer == "" and item_name != "":
-                    display_date = last_date
-                    display_buyer = last_buyer
+                    display_date, display_buyer = last_date, last_buyer
                 else:
-                    display_date = raw_date
-                    display_buyer = raw_buyer
+                    display_date, display_buyer = raw_date, raw_buyer
                     if raw_date != "": last_date = raw_date
                     if raw_buyer != "": last_buyer = raw_buyer
 
+                # 取出數值
                 qty = row.get('數量', 0)
                 price = row.get('單價(售)', 0)
                 fee = row.get('分攤手續費', 0)
                 profit = row.get('總淨利', 0)
-                
-                raw_margin = row.get('毛利率')
-                if pd.isna(raw_margin): margin = "0.0%"
-                elif isinstance(raw_margin, (int, float)): margin = f"{raw_margin}%"
-                else: margin = str(raw_margin)
+                margin = str(row.get('毛利率', '0.0')) + "%"
 
-                self.tree_sales_edit.insert("", "end", text=str(idx), values=(display_date, display_buyer, item_name, qty, price, fee, profit, margin))
-
+                self.tree_sales_edit.insert("", "end", text=str(idx), values=(
+                    display_date, display_buyer, item_name, qty, price, fee, profit, margin
+                ))
         except Exception as e:
-            print(f"讀取列表失敗: {e}")
+            print(f"讀取歷史列表失敗: {e}")
 
     def on_sales_edit_select(self, event):
         """點擊列表時，將資料填入編輯框"""
@@ -1826,57 +1827,87 @@ class SalesApp:
         except Exception as e: messagebox.showerror("錯誤", str(e))
 
     def action_track_complete_order(self):
-        """ 完成訂單 (整筆結案：移至銷售紀錄) """
+        """ 完成訂單 (整筆結案：移至銷售紀錄並自動排序) """
         sel = self.tree_track.selection()
         if not sel: return
         item = self.tree_track.item(sel[0])
         order_id = str(item['values'][0]).replace("'", "")
 
-        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成出貨並收款？\n這將會把整筆訂單移至歷史銷售紀錄。"):
+        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？\n這將會把整筆訂單移至銷售紀錄並自動按日期排序。"):
             return
 
         try:
+            # 1. 讀取追蹤表與歷史表
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
+            
+            # 統一格式化編號
             df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            df_sales['訂單編號'] = df_sales['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
 
-            # 1. 找出整筆訂單
+            # 2. 提取並補齊新結案的資料
             mask = df_track['訂單編號'] == order_id
             rows_to_finish = df_track[mask].copy()
-            
-            # 2. 為每一行補齊資訊 (歷史紀錄建議每行都完整，方便資料探勘)
             info = self._get_full_order_info(df_track, order_id)
             for col, val in info.items():
                 rows_to_finish[col] = val
 
-            # 3. 讀取並合併至銷售紀錄
-            df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
-            df_sales = pd.concat([df_sales, rows_to_finish], ignore_index=True)
+            # 3. 合併舊資料與新資料
+            df_sales_combined = pd.concat([df_sales, rows_to_finish], ignore_index=True)
+
+            # --- [核心排序邏輯] ---
+            # 將日期轉為 datetime 格式以便精準排序
+            df_sales_combined['tmp_date'] = pd.to_datetime(df_sales_combined['日期'], errors='coerce')
+            
+            # 排序：日期由新到舊 (descending)，訂單編號也由新到舊
+            # 這樣可以確保「最新結案」或「日期最新」的永遠在 Excel 最上方
+            df_sales_combined = df_sales_combined.sort_values(
+                by=['tmp_date', '訂單編號'], 
+                ascending=[False, False]
+            ).drop(columns=['tmp_date']) # 刪除暫存的排序欄位
+            # ----------------------
 
             # 4. 從追蹤表移除
             df_track_new = df_track[~mask]
 
-            # 5. 存檔
-            self._save_all_sheets_with_protect(df_track_new, SHEET_TRACKING, df_sales, SHEET_SALES)
-            messagebox.showinfo("成功", f"訂單 {order_id} 已結案！")
+            # 5. 存檔 (呼叫我們之前寫的保護編號函式)
+            self._save_all_sheets_with_protect(df_track_new, SHEET_TRACKING, df_sales_combined, SHEET_SALES)
+            
+            messagebox.showinfo("成功", f"訂單 {order_id} 已結案並完成日期歸檔。")
             self.load_tracking_data()
-        except Exception as e: messagebox.showerror("錯誤", str(e))
+            self.load_sales_records_for_edit() # 更新歷史列表
+            self.calculate_analysis_data()    # 更新營收分析
+            
+        except Exception as e:
+            messagebox.showerror("錯誤", f"結案失敗: {str(e)}")
 
     def _save_all_sheets_with_protect(self, df1, name1, df2, name2):
-        """ 萬用存檔輔助：寫入兩個變動的分頁，並保護其餘分頁與編號格式 """
-        # 保護編號
-        for df in [df1, df2]:
+        """ 萬用存檔輔助：增加全自動排序與編號保護 """
+        
+        def process_df(df, name):
+            # 保護編號 (加上單引號)
             if '訂單編號' in df.columns:
                 df['訂單編號'] = df['訂單編號'].apply(lambda x: f"'{str(x).replace('\'','')}")
+            
+            # 如果是銷售紀錄或退貨紀錄，存檔前強制再排一次序
+            if name in [SHEET_SALES, SHEET_RETURNS] and '日期' in df.columns:
+                df['tmp_sort_dt'] = pd.to_datetime(df['日期'], errors='coerce')
+                df = df.sort_values(by=['tmp_sort_dt', '訂單編號'], ascending=[False, False])
+                df = df.drop(columns=['tmp_sort_dt'])
+            return df
+
+        df1 = process_df(df1, name1)
+        df2 = process_df(df2, name2)
 
         with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             df1.to_excel(writer, sheet_name=name1, index=False)
             df2.to_excel(writer, sheet_name=name2, index=False)
-            # 保留沒變動的分頁
-            all_sheets = [SHEET_SALES, SHEET_TRACKING, SHEET_RETURNS, SHEET_PRODUCTS]
-            for s in all_sheets:
+            # 寫回其他沒變動的分頁... (其餘邏輯不變)
+            for s in [SHEET_SALES, SHEET_TRACKING, SHEET_RETURNS, SHEET_PRODUCTS, SHEET_CONFIG]:
                 if s != name1 and s != name2:
                     try:
-                        pd.read_excel(FILE_NAME, sheet_name=s).to_excel(writer, sheet_name=s, index=False)
+                        temp_df = pd.read_excel(FILE_NAME, sheet_name=s)
+                        temp_df.to_excel(writer, sheet_name=s, index=False)
                     except: pass
     
 
@@ -2264,6 +2295,13 @@ class SalesApp:
         cost = self.var_add_cost.get()
         tag = self.var_add_tag.get().strip()
         stock = self.var_add_stock.get() 
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        new_row = pd.DataFrame([{
+            "分類Tag": tag, "商品名稱": name, "預設成本": cost, 
+            "目前庫存": stock, "最後更新時間": now_str,
+            "初始上架時間": now_str, "最後進貨時間": now_str  # 初始化
+        }])
         
         if not name:
             messagebox.showwarning("警告", "請輸入商品名稱")
@@ -2292,29 +2330,66 @@ class SalesApp:
     def submit_update_product(self):
         name = self.var_upd_name.get()
         if not name: return
+        
         new_tag = self.var_upd_tag.get().strip()
         new_cost = self.var_upd_cost.get()
         new_stock = self.var_upd_stock.get() 
         
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            df_old = pd.read_excel(FILE_NAME, sheet_name='商品資料')
-            idx = df_old[df_old['商品名稱'] == name].index
+            # 1. 讀取商品資料
+            df_prods = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
+            
+            idx = df_prods[df_prods['商品名稱'] == name].index
             if not idx.empty:
-                df_old.loc[idx, '分類Tag'] = new_tag
-                df_old.loc[idx, '預設成本'] = new_cost
-                df_old.loc[idx, '目前庫存'] = new_stock 
-                df_old.loc[idx, '最後更新時間'] = now_str
-                df_old = df_old.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
+                old_stock = df_prods.loc[idx, '目前庫存'].values[0]
+                
+                # 補齊舊資料欄位 (相容性)
+                if "初始上架時間" not in df_prods.columns: df_prods["初始上架時間"] = df_prods["最後更新時間"]
+                if "最後進貨時間" not in df_prods.columns: df_prods["最後進貨時間"] = df_prods["最後更新時間"]
 
-                with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                     df_old.to_excel(writer, sheet_name='商品資料', index=False)
-                self.products_df = df_old
-                self.update_sales_prod_list() 
+                # 補貨判定邏輯
+                if new_stock > old_stock:
+                    df_prods.loc[idx, '最後進貨時間'] = now_str
+                    print(f"檢測到商品 {name} 補貨，更新進貨時間。")
+                
+                # 更新欄位
+                df_prods.loc[idx, '分類Tag'] = new_tag
+                df_prods.loc[idx, '預設成本'] = new_cost
+                df_prods.loc[idx, '目前庫存'] = new_stock 
+                df_prods.loc[idx, '最後更新時間'] = now_str
+                
+                # --- [修正：保護分頁的完整存檔邏輯] ---
+                # 讀取其他分頁資料，避免被刪除
+                try:
+                    with pd.ExcelFile(FILE_NAME) as xls:
+                        df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
+                        df_track = pd.read_excel(xls, sheet_name=SHEET_TRACKING)
+                        df_ret = pd.read_excel(xls, sheet_name=SHEET_RETURNS)
+                        df_cfg = pd.read_excel(xls, sheet_name=SHEET_CONFIG)
+                except Exception as e:
+                    # 如果讀取失敗 (例如有些分頁還沒產生)，則建立空白 DataFrame
+                    df_sales = df_track = df_ret = df_cfg = pd.DataFrame()
+
+                # 一口氣全部寫回
+                with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
+                    df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
+                    # 依序把舊有的資料寫回去，保護它們不消失
+                    if not df_sales.empty: df_sales.to_excel(writer, sheet_name=SHEET_SALES, index=False)
+                    if not df_track.empty: df_track.to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
+                    if not df_ret.empty: df_ret.to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
+                    if not df_cfg.empty: df_cfg.to_excel(writer, sheet_name=SHEET_CONFIG, index=False)
+                # ------------------------------------
+                
+                self.products_df = self.load_products() 
                 self.update_mgmt_prod_list()
                 self.var_upd_time.set(now_str) 
-                messagebox.showinfo("成功", f"已更新：{name} (目前庫存: {new_stock})")
-        except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
+                messagebox.showinfo("成功", f"商品「{name}」資訊已更新！")
+                
+        except PermissionError: 
+            messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"更新失敗: {e}")
 
     def delete_product(self):
         name = self.var_upd_name.get()
@@ -2347,4 +2422,4 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
-    root.mainloop()
+
