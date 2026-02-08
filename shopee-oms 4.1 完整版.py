@@ -1,4 +1,4 @@
-#shopee-oms 4.0 完整版
+#shopee-oms 4.1 完整版
 
 import json
 import sys
@@ -3229,3 +3229,4 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
+
