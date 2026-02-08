@@ -66,7 +66,7 @@ TAIWAN_CITIES = [
     "基隆市", "臺北市", "新北市", "桃園市", "新竹市", "新竹縣", "苗栗縣",
     "臺中市", "彰化縣", "南投縣", "雲林縣", "嘉義市", "嘉義縣", "臺南市",
     "高雄市", "屏東縣", "宜蘭縣", "花蓮縣", "臺東縣", "澎湖縣", "金門縣", "連江縣",
-    "海外", "面交"
+    "海外", "面交", "未提供"
 ]
 
 
@@ -79,18 +79,6 @@ SHIPPING_METHODS = [
     "7-11", "全家", "萊爾富", "OK超商", "蝦皮店到店", 
     "蝦皮店到店-隔日到貨", "蝦皮店到宅",
     "黑貓宅急便", "新竹物流", "郵局掛號", "賣家宅配", "面交/自取"
-]
-
-SHOPEE_FEE_OPTIONS = [
-    "自訂手動輸入",
-    "一般賣家-平日 (14.0%)",         
-    "一般賣家-促銷檔期 (16.0%)",     
-    "一般賣家-較長備貨-平日 (17.0%)", 
-    "一般賣家-較長備貨-促銷 (19.0%)", 
-    "商城-平日 (17.0%)",             
-    "商城-促銷檔期 (20.9%)",         
-    "商城-較長備貨-平日 (20.0%)",
-    "商城-較長備貨-促銷 (23.9%)"
 ]
 
 
@@ -307,9 +295,16 @@ class SalesApp:
             
             cols_purchase = ["進貨單號", "進貨日期", "供應商", "物流追蹤編號", "商品名稱", "數量", "進貨單價", "進貨總額", "進項稅額", "備註"]
 
-            cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間", "初始上架時間", "最後進貨時間", "安全庫存"]
+            cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", 
+                            "最後更新時間", "初始上架時間", "最後進貨時間", "安全庫存",
+                            "商品連結", "商品備註"]
 
-            cols_config = ["設定名稱", "費率百分比"]
+            cols_config = ["設定名稱", "費率百分比", "固定金額"]
+
+            default_fees = [
+                ["蝦皮一般 方案一", 14.5, 0],
+                ["蝦皮活動 方案二", 8.0, 60], # 8% + 60元
+                ]
             
 
             if not os.path.exists(FILE_NAME):
@@ -361,6 +356,7 @@ class SalesApp:
     def create_tabs(self):
         tab_control = ttk.Notebook(self.root)
         
+        self.tab_about = ttk.Frame(tab_control)
         self.tab_purchase = ttk.Frame(tab_control) # [新增] 進貨分頁
         self.tab_pur_tracking = ttk.Frame(tab_control)
         self.tab_sales = ttk.Frame(tab_control)
@@ -371,7 +367,6 @@ class SalesApp:
         self.tab_analysis = ttk.Frame(tab_control)
         self.tab_procurement = ttk.Frame(tab_control)
         self.tab_backup = ttk.Frame(tab_control) 
-        self.tab_about = ttk.Frame(tab_control)
         self.tab_about_us = ttk.Frame(tab_control)
         
 
@@ -1336,7 +1331,7 @@ class SalesApp:
         f1.pack(fill="x")
         ttk.Label(f1, text="費率:").pack(side="left")
         
-        self.combo_fee_rate = ttk.Combobox(f1, textvariable=self.var_fee_rate_str, values=SHOPEE_FEE_OPTIONS, width=28)
+        self.combo_fee_rate = ttk.Combobox(f1, textvariable=self.var_fee_rate_str, values="readonly", width=28)
         self.combo_fee_rate.pack(side="left", padx=5)
         self.combo_fee_rate.set("一般賣家-平日 (14.5%)") 
         self.combo_fee_rate.bind('<<ComboboxSelected>>', self.on_fee_option_selected)
@@ -1386,75 +1381,80 @@ class SalesApp:
 
 
     def setup_product_tab(self):
+        #""" 建立商品資料管理：身分與價值分離模式 """
+        # 初始化變數
+        self.var_add_tag = tk.StringVar(); self.var_add_name = tk.StringVar()
+        self.var_add_url = tk.StringVar(); self.var_add_remarks = tk.StringVar()
+        self.var_add_safety = tk.IntVar(value=0)
+
+        self.var_upd_tag = tk.StringVar(); self.var_upd_name = tk.StringVar()
+        self.var_upd_url = tk.StringVar(); self.var_upd_remarks = tk.StringVar()
+        self.var_upd_safety = tk.IntVar(value=0)
+        self.var_upd_stock = tk.IntVar(value=0)
+        self.var_upd_cost = tk.DoubleVar(value=0.0)
+        self.var_upd_time = tk.StringVar(value="尚未選擇商品")
+
         paned = ttk.PanedWindow(self.tab_products, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
-        frame_add = ttk.LabelFrame(paned, text="新增商品", padding=15)
-        paned.add(frame_add, weight=1)
+        # --- 1. 左側：新商品建檔 (身分證) ---
+        frame_left = ttk.LabelFrame(paned, text="🆕 新商品身分建檔", padding=15)
+        paned.add(frame_left, weight=1)
 
-        ttk.Label(frame_add, text="1. 分類Tag:").pack(anchor="w", pady=(0,5))
-        self.combo_add_tag = ttk.Combobox(frame_add, textvariable=self.var_add_tag)
-        self.combo_add_tag.pack(fill="x", pady=5)
-        self.combo_add_tag.bind('<Button-1>', self.load_existing_tags)
-
-        ttk.Label(frame_add, text="2. 商品名稱:").pack(anchor="w", pady=(10,5))
-        ttk.Entry(frame_add, textvariable=self.var_add_name).pack(fill="x", pady=5)
-
-        ttk.Label(frame_add, text="3. 進貨成本:").pack(anchor="w", pady=(10,5))
-        ttk.Entry(frame_add, textvariable=self.var_add_cost).pack(fill="x", pady=5)
+        ttk.Label(frame_left, text="1. 分類 Tag:").pack(anchor="w")
+        ttk.Combobox(frame_left, textvariable=self.var_add_tag).pack(fill="x", pady=3)
         
-        ttk.Label(frame_add, text="4. 初始庫存:").pack(anchor="w", pady=(10,5))
-        ttk.Entry(frame_add, textvariable=self.var_add_stock).pack(fill="x", pady=5)
+        ttk.Label(frame_left, text="2. 商品名稱:").pack(anchor="w")
+        ttk.Entry(frame_left, textvariable=self.var_add_name).pack(fill="x", pady=3)
 
-        ttk.Button(frame_add, text="+ 新增", command=self.submit_new_product).pack(fill="x", pady=20)
+        ttk.Label(frame_left, text="3. 採購連結 (URL):").pack(anchor="w")
+        ttk.Entry(frame_left, textvariable=self.var_add_url).pack(fill="x", pady=3)
 
-        frame_upd = ttk.LabelFrame(paned, text="更新商品", padding=15)
-        paned.add(frame_upd, weight=1)
+        ttk.Label(frame_left, text="4. 安全庫存量:").pack(anchor="w")
+        ttk.Entry(frame_left, textvariable=self.var_add_safety).pack(fill="x", pady=3)
 
-        ttk.Label(frame_upd, text="搜尋關鍵字:").pack(anchor="w")
-        e_search = ttk.Entry(frame_upd, textvariable=self.var_mgmt_search)
-        e_search.pack(fill="x", pady=5)
-        e_search.bind('<KeyRelease>', self.update_mgmt_prod_list)
+        ttk.Label(frame_left, text="5. 商品備註:").pack(anchor="w")
+        ttk.Entry(frame_left, textvariable=self.var_add_remarks).pack(fill="x", pady=3)
 
-        list_frame = ttk.Frame(frame_upd)
-        list_frame.pack(fill="both", expand=True, pady=5)
-        self.listbox_mgmt = tk.Listbox(list_frame, height=10)
-        sb = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox_mgmt.yview)
-        self.listbox_mgmt.configure(yscrollcommand=sb.set)
-        self.listbox_mgmt.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        ttk.Button(frame_left, text="✅ 完成建檔", command=self.submit_new_product).pack(fill="x", pady=20)
+
+        # --- 2. 右側：資料查詢與維護 ---
+        frame_right = ttk.LabelFrame(paned, text="🔍 商品資料維護", padding=15)
+        paned.add(frame_right, weight=1)
+
+        ttk.Entry(frame_right, textvariable=self.var_mgmt_search).pack(fill="x")
+        self.listbox_mgmt = tk.Listbox(frame_right, height=8)
+        self.listbox_mgmt.pack(fill="both", expand=True, pady=5)
         self.listbox_mgmt.bind('<<ListboxSelect>>', self.on_mgmt_prod_select)
 
-        edit_frame = ttk.LabelFrame(frame_upd, text="編輯選中商品", padding=10)
-        edit_frame.pack(fill="x", pady=10)
+        # 編輯區 (Grid 排版)
+        edit_frame = ttk.LabelFrame(frame_right, text="✏️ 快速編輯資料", padding=10)
+        edit_frame.pack(fill="x")
+        e_opts = {'padx': 5, 'pady': 2, 'sticky': 'w'}
         
-        self.var_upd_safety = tk.IntVar(value=0) # [新增]
+        ttk.Label(edit_frame, text="名稱:").grid(row=0, column=0, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=0, column=1, sticky="ew")
+        ttk.Label(edit_frame, text="Tag:").grid(row=0, column=2, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_tag).grid(row=0, column=3, sticky="ew")
 
-        ttk.Label(edit_frame, text="名稱 (不可改):").grid(row=0, column=0, sticky="w")
-        ttk.Entry(edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Label(edit_frame, text="採購連結:").grid(row=1, column=0, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_url).grid(row=1, column=1, columnspan=3, sticky="ew")
 
-        ttk.Label(edit_frame, text="分類Tag:").grid(row=1, column=0, sticky="w", pady=5)
-        self.combo_upd_tag = ttk.Combobox(edit_frame, textvariable=self.var_upd_tag, width=18)
-        self.combo_upd_tag.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
-        self.combo_upd_tag.bind('<Button-1>', self.load_existing_tags)
+        ttk.Label(edit_frame, text="備註:").grid(row=2, column=0, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_remarks).grid(row=2, column=1, columnspan=3, sticky="ew")
 
-        ttk.Label(edit_frame, text="成本:").grid(row=2, column=0, sticky="w", pady=5)
-        ttk.Entry(edit_frame, textvariable=self.var_upd_cost).grid(row=2, column=1, sticky="ew", padx=5, pady=5)
-        
-        ttk.Label(edit_frame, text="庫存(補貨):").grid(row=3, column=0, sticky="w", pady=5)
-        ttk.Entry(edit_frame, textvariable=self.var_upd_stock).grid(row=3, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Label(edit_frame, text="庫存量:").grid(row=3, column=0, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_stock).grid(row=3, column=1, sticky="ew")
+        ttk.Label(edit_frame, text="安全量:").grid(row=3, column=2, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_safety).grid(row=3, column=3, sticky="ew")
 
-        ttk.Label(edit_frame, text="安全庫存量:").grid(row=4, column=0, sticky="w", pady=5)
-        ttk.Entry(edit_frame, textvariable=self.var_upd_safety).grid(row=4, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Label(edit_frame, text="加權成本:").grid(row=4, column=0, **e_opts)
+        ttk.Entry(edit_frame, textvariable=self.var_upd_cost).grid(row=4, column=1, sticky="ew")
 
-        ttk.Label(edit_frame, text="更新時間:").grid(row=5, column=0, sticky="w")
-        ttk.Label(edit_frame, textvariable=self.var_upd_time, foreground="gray").grid(row=5, column=1, sticky="w", padx=5)
-
-        btn_frame = ttk.Frame(edit_frame)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
-        
-        ttk.Button(btn_frame, text="💾 儲存", command=self.submit_update_product).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ttk.Button(btn_frame, text="🗑️ 刪除", command=self.delete_product).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        btn_f = ttk.Frame(edit_frame)
+        btn_f.grid(row=5, column=0, columnspan=4, pady=10)
+        ttk.Button(btn_f, text="💾 儲存修改", command=self.submit_update_product).pack(side="left", padx=5)
+        ttk.Button(btn_f, text="🗑️ 刪除商品", command=self.delete_product).pack(side="left", padx=5)
 
         self.update_mgmt_prod_list()
 
@@ -2026,6 +2026,11 @@ class SalesApp:
         self.ent_fee_val = ttk.Entry(ctrl_frame, width=15)
         self.ent_fee_val.pack(pady=5)
 
+        ttk.Label(ctrl_frame, text="固定金額 ($):").pack(anchor="w")
+        self.ent_fee_fixed = ttk.Entry(ctrl_frame, width=15)
+        self.ent_fee_fixed.insert(0, "0") # 預設為 0
+        self.ent_fee_fixed.pack(pady=5)
+
         ttk.Button(ctrl_frame, text="➕ 新增/更新", command=self.action_add_custom_fee).pack(fill="x", pady=5)
         ttk.Button(ctrl_frame, text="🗑️ 刪除選取", command=self.action_delete_custom_fee).pack(fill="x", pady=5)
         ttk.Label(ctrl_frame, text="*修改後銷售頁面\n選單會同步更新", foreground="gray", font=("", 9)).pack(pady=10)
@@ -2034,82 +2039,99 @@ class SalesApp:
         self.refresh_fee_tree()
 
     def refresh_fee_tree(self):
-        """ 刷新設定頁面的 Treeview 並同步更新銷售頁面的 Combobox (修正版：加入安全檢查) """
-        
-        # 【修正點 1】：檢查 fee_tree 是否已經被 setup_about_tab 建立
+        # """ 刷新費率列表，顯示格式改為：名稱 (8% + $60) """
         if hasattr(self, 'fee_tree'):
-            for i in self.fee_tree.get_children(): 
-                self.fee_tree.delete(i)
-
+            for i in self.fee_tree.get_children(): self.fee_tree.delete(i)
         try:
-            # 讀取 Excel 內的費率設定
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
             fee_options = ["自訂手動輸入"]
-            
             for _, row in df.iterrows():
-                name, val = row['設定名稱'], row['費率百分比']
+                name = row['設定名稱']
+                perc = row['費率百分比']
+                fixed = row.get('固定金額', 0) # 加上 get 防止舊檔報錯
                 
-                # 【修正點 2】：只有當介面物件存在時才插入資料到列表
                 if hasattr(self, 'fee_tree'):
-                    self.fee_tree.insert("", "end", values=(name, val))
+                    self.fee_tree.insert("", "end", values=(name, perc, fixed))
                 
-                # 組合出顯示在下拉選單的文字：例如 "一般賣家 (14.5%)"
-                fee_options.append(f"{name} ({val}%)")
+                # 格式化顯示在下拉選單：例如 "蝦皮活動 (8.0% + $60)"
+                display_str = f"{name} ({perc}% + ${fixed})" if fixed > 0 else f"{name} ({perc}%)"
+                fee_options.append(display_str)
             
-            # 同步更新銷售輸入頁面的 Combobox (如果它存在的話)
             if hasattr(self, 'combo_fee_rate'):
                 self.combo_fee_rate['values'] = fee_options
-        except Exception as e:
-            print(f"讀取費率失敗: {e}")
+        except: pass
 
     def action_add_custom_fee(self):
+        #""" 新增或更新自訂費率 (修正版：解決 df 變數未定義問題) """
         name = self.ent_fee_name.get().strip()
         raw_val = self.ent_fee_val.get().strip()
-        
+        raw_fixed = self.ent_fee_fixed.get().strip() # 取得固定金額
+
         if not name or not raw_val:
             messagebox.showwarning("警告", "請輸入名稱與費率")
             return
 
         try:
+            # 1. 數值預處理 (過濾 % 號並轉為數字)
             clean_val = raw_val.replace("%", "")
             val = float(clean_val)
-        except ValueError:
-            messagebox.showerror("錯誤", f"費率「{raw_val}」不是有效數字")
-            return
+            fixed_val = float(raw_fixed) if raw_fixed else 0.0
+            
+            target_cols = ["設定名稱", "費率百分比", "固定金額"]
+            df = None # 【核心修正】：先將 df 初始化為 None
 
-        try:
-            # --- [修正開始] 強大讀取邏輯 ---
-            target_cols = ["設定名稱", "費率百分比"]
-            try:
-                # 嘗試讀取現有的設定
-                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-                
-                # 如果讀進來的欄位不對，強制重設
-                if '設定名稱' not in df.columns:
+            # 2. 嘗試讀取現有的 Excel 設定
+            if os.path.exists(FILE_NAME):
+                try:
+                    df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                    
+                    # 檢查並補齊缺失欄位 (防止舊版 Excel 報錯)
+                    for col in target_cols:
+                        if col not in df.columns:
+                            df[col] = 0.0
+                except Exception:
+                    # 如果分頁不存在或讀取失敗，建立全新的 DataFrame
                     df = pd.DataFrame(columns=target_cols)
-            except Exception:
-                # 如果分頁不存在或讀取失敗，建立新的
-                df = pd.DataFrame(columns=target_cols)
-            # --- [修正結束] ---
-
-            # 如果名稱重複則更新，不重複則新增
-            if not df.empty and name in df['設定名稱'].values:
-                df.loc[df['設定名稱'] == name, '費率百分比'] = val
             else:
-                new_row = pd.DataFrame([[name, val]], columns=target_cols)
+                # 檔案根本不存在
+                df = pd.DataFrame(columns=target_cols)
+
+            # 如果到這裡 df 還是 None (極端情況)，補上初始化
+            if df is None:
+                df = pd.DataFrame(columns=target_cols)
+
+            # 3. 執行新增或更新邏輯
+            # 確保內容是乾淨的字串進行比對
+            df['設定名稱'] = df['設定名稱'].astype(str).str.strip()
+            
+            if not df.empty and name in df['設定名稱'].values:
+                # 更新現有費率
+                df.loc[df['設定名稱'] == name, '費率百分比'] = val
+                df.loc[df['設定名稱'] == name, '固定金額'] = fixed_val
+            else:
+                # 新增一筆
+                new_row = pd.DataFrame([[name, val, fixed_val]], columns=target_cols)
                 df = pd.concat([df, new_row], ignore_index=True)
+
+            # 4. 調用全能存檔引擎 (我們剛剛統一過的函式)
+            # 注意：這裡呼叫的是 _universal_save，它會保護其他所有分頁
+            save_success = self._universal_save({SHEET_CONFIG: df})
             
-            # 存回 Excel
-            self._save_config_to_excel(df)
-            self.refresh_fee_tree()
-            
-            # 清空輸入框
-            self.ent_fee_name.delete(0, tk.END)
-            self.ent_fee_val.delete(0, tk.END)
-            messagebox.showinfo("成功", f"費率「{name}」已儲存。")
-            
+            if save_success:
+                # 5. 刷新介面
+                self.refresh_fee_tree()
+                
+                # 清空輸入框
+                self.ent_fee_name.delete(0, tk.END)
+                self.ent_fee_val.delete(0, tk.END)
+                self.ent_fee_fixed.delete(0, tk.END)
+                self.ent_fee_fixed.insert(0, "0") # 重設為 0
+                messagebox.showinfo("成功", f"費率「{name}」設定已儲存至 Excel。")
+
+        except ValueError:
+            messagebox.showerror("錯誤", "費率與固定金額必須是有效的數字！")
         except Exception as e:
-            messagebox.showerror("儲存失敗", f"發生錯誤: {str(e)}")
+            messagebox.showerror("儲存失敗", f"發生非預期錯誤: {str(e)}")
 
     def action_delete_custom_fee(self):
         sel = self.fee_tree.selection()
@@ -2263,13 +2285,16 @@ class SalesApp:
             messagebox.showerror("錯誤", f"取消失敗: {e}")
 
     def action_confirm_inbound(self):
-        """ 確認收貨：執行加權成本計算，更新庫存，並僅刪除『追蹤』分頁紀錄 """
+        """ [修正版] 確認收貨：執行加權成本計算，並透過萬用引擎存檔 """
         sel = self.tree_pur_track.selection()
-        if not sel: return
+        if not sel: 
+            messagebox.showwarning("提示", "請選擇要入庫的項目")
+            return
         
+        # 取得 Treeview 介面顯示的資訊
         item = self.tree_pur_track.item(sel[0])
         idx_in_df = int(item['text'])
-        pur_id = item['values'][0]
+        pur_id = str(item['values'][0]).replace("'", "") # 去除可能的單引號
         p_name = item['values'][2]
         new_qty = int(item['values'][3])
         new_cost = float(item['values'][4])
@@ -2278,49 +2303,62 @@ class SalesApp:
             return
 
         try:
+            # 1. 讀取核心分頁 (只需要讀取要修改的這三個，其餘由引擎處理)
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
                 df_tracking = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
                 df_history = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
-                # 其餘分頁
-                others = {sn: pd.read_excel(xls, sheet_name=sn) for sn in xls.sheet_names if sn not in [SHEET_PRODUCTS, SHEET_PUR_TRACKING, SHEET_PURCHASES]}
 
-            # 1. 【計算加權平均成本】
+            # 2. 【核心計算：精準加權平均成本 (WAC)】
             if p_name in df_prods['商品名稱'].values:
                 p_idx = df_prods[df_prods['商品名稱'] == p_name].index[0]
                 old_stock = df_prods.at[p_idx, '目前庫存']
                 old_cost = df_prods.at[p_idx, '預設成本']
                 
                 total_qty = old_stock + new_qty
+                
                 if total_qty > 0:
-                    # 公式: (舊總值 + 新總值) / 總量
-                    weighted_cost = round(((old_stock * old_cost) + (new_qty * new_cost)) / total_qty, 2)
-                    df_prods.at[p_idx, '預設成本'] = weighted_cost
+                    # 如果原本庫存是 0 或是負數（超賣），新成本直接採用本次進貨價
+                    if old_stock <= 0:
+                        weighted_cost = new_cost
+                    else:
+                        # 公式: (舊總值 + 新進貨值) / 總量
+                        weighted_cost = ((old_stock * old_cost) + (new_qty * new_cost)) / total_qty
+                    
+                    # 更新商品分頁資料
+                    df_prods.at[p_idx, '預設成本'] = round(weighted_cost, 2)
                     df_prods.at[p_idx, '目前庫存'] = total_qty
                     df_prods.at[p_idx, '最後進貨時間'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    df_prods.at[p_idx, '最後更新時間'] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-            # 2. 【標記紀錄分頁】找到歷史紀錄中的那一筆，將其備註改為『已入庫』
-            # 這樣紀錄分頁就不會永遠顯示在途
-            clean_id = str(pur_id).replace("'", "")
-            mask = (df_history['進貨單號'].astype(str).str.contains(clean_id)) & (df_history['商品名稱'] == p_name)
+            # 3. 【同步更新進貨總帳】將歷史紀錄中的備註改為「已完成」
+            # 利用單號與品名進行精準匹配
+            mask = (df_history['進貨單號'].astype(str).str.contains(pur_id)) & (df_history['商品名稱'] == p_name)
             df_history.loc[mask, '備註'] = "已完成"
 
-            # 3. 【刪除追蹤分頁】
+            # 4. 【刪除待辦清單】從追蹤分頁移除該列
             df_tracking.drop(idx_in_df, inplace=True)
 
-            # 4. 寫回所有資料
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
-                df_tracking.to_excel(writer, sheet_name=SHEET_PUR_TRACKING, index=False)
-                df_history.to_excel(writer, sheet_name=SHEET_PURCHASES, index=False)
-                for sn, df in others.items(): df.to_excel(writer, sheet_name=sn, index=False)
+            # 5. 【關鍵：調用萬用存檔引擎】
+            # 這會自動處理：其他所有 Sheet 的保留、ID 保護、日期排序、一次性寫回
+            save_success = self._universal_save({
+                SHEET_PRODUCTS: df_prods,
+                SHEET_PUR_TRACKING: df_tracking,
+                SHEET_PURCHASES: df_history
+            })
 
-            messagebox.showinfo("入庫成功", f"商品已增加庫存，且已自追蹤清單移除。")
-            self.load_purchase_tracking()
-            self.products_df = self.load_products()
-            self.update_sales_prod_list()
+            if save_success:
+                messagebox.showinfo("入庫成功", f"商品「{p_name}」已增加庫存。\n新加權成本為: ${df_prods.at[p_idx, '預設成本']}")
+                
+                # 重新載入介面數據
+                self.load_purchase_tracking()
+                self.products_df = self.load_products()
+                self.update_sales_prod_list() 
+                self.update_mgmt_prod_list()
+                self.calculate_analysis_data() # 同步更新分析數據
+
         except Exception as e:
-            messagebox.showerror("錯誤", f"入庫失敗: {e}")
+            messagebox.showerror("錯誤", f"入庫失敗: {str(e)}")
 
 
     def update_pur_prod_list(self):
@@ -2833,49 +2871,55 @@ class SalesApp:
     def update_totals_event(self, event): self.update_totals()
     
     def update_totals(self):
-        """ 修正銷售總計：支援 1% 與 5% 內含稅回推邏輯 """
         try:
             t_sales = sum(i['total_sales'] for i in self.cart_data)
             t_cost = sum(i['total_cost'] for i in self.cart_data)
             
-            # 解析手續費率
-            raw_rate = self.var_fee_rate_str.get()
+            # --- [優化：解析複合費率] ---
+            selection = self.var_fee_rate_str.get()
             rate = 0.0
-            try: rate = float(raw_rate)
-            except ValueError:
-                match = re.search(r"\((\d+\.?\d*)%\)", raw_rate)
-                rate = float(match.group(1)) if match else 0.0
+            fixed_fee = 0.0
+            
+            if "(" in selection:
+                # 取得括號前的名稱 (例如 "蝦皮活動")
+                fee_name = selection.split(" (")[0]
+                try:
+                    # 去 Excel 設定表找這筆名稱的數值
+                    df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                    match = df_cfg[df_cfg['設定名稱'] == fee_name]
+                    if not match.empty:
+                        rate = float(match.iloc[0]['費率百分比'])
+                        fixed_fee = float(match.iloc[0].get('固定金額', 0))
+                except: pass
+            else:
+                # 使用者手動輸入數字的情況
+                try: rate = float(selection)
+                except: rate = 0.0
 
+            # 取得「扣費項目」手動填寫的金額 (例如額外廣告費)
             try: extra = float(self.var_extra_fee.get())
             except: extra = 0.0
             
-            platform_fee = (t_sales * (rate/100)) + extra
-            income = t_sales - platform_fee
-
-            # --- [核心修正：稅額計算] ---
+            # --- [核心計算公式修正] ---
+            # 總手續費 = (銷售額 * 百分比) + 固定單筆費用 + 其他扣費
+            platform_fee = (t_sales * (rate/100)) + fixed_fee + extra
+            
+            # 稅務計算 (維持原本邏輯)
             tax_amount = 0
             tax_type = self.var_tax_type.get()
-            
-            if "5%" in tax_type:
-                # 5% 內含稅公式
-                tax_amount = t_sales - (t_sales / 1.05)
-            elif "1%" in tax_type:
-                # 1% 內含稅公式 (免用發票收據)
-                tax_amount = t_sales - (t_sales / 1.01)
-            # --------------------------
+            if "5%" in tax_type: tax_amount = t_sales - (t_sales / 1.05)
+            elif "1%" in tax_type: tax_amount = t_sales - (t_sales / 1.01)
 
-            profit = t_sales - platform_fee - tax_amount - t_cost
+            income = t_sales - platform_fee # 平台實際撥款
+            profit = t_sales - platform_fee - tax_amount - t_cost # 真正賺的錢
             
+            # 更新顯示
             self.lbl_gross.config(text=f"總金額: ${t_sales:,.0f}")
-            self.lbl_fee.config(text=f"平台扣費: -${platform_fee:,.1f}")
-            self.lbl_income.config(text=f"預估入帳(平台撥款): ${income:,.1f}")
+            self.lbl_fee.config(text=f"平台扣費: -${platform_fee:,.1f} (含固定費: ${fixed_fee})")
+            self.lbl_income.config(text=f"預估入帳: ${income:,.1f}")
+            self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
 
-            if tax_amount > 0:
-                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f} ({tax_type}稅額: -${tax_amount:,.0f})")
-            else:
-                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
-
-            return t_sales, platform_fee, tax_amount # 多回傳一個稅額
+            return t_sales, platform_fee, tax_amount
         except: 
             return 0, 0, 0
         
@@ -3059,41 +3103,36 @@ class SalesApp:
 
     def submit_new_product(self):
         name = self.var_add_name.get().strip()
-        cost = self.var_add_cost.get()
-        tag = self.var_add_tag.get().strip()
-        stock = self.var_add_stock.get() 
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        new_row = pd.DataFrame([{
-            "分類Tag": tag, "商品名稱": name, "預設成本": cost, 
-            "目前庫存": stock, "最後更新時間": now_str,
-            "初始上架時間": now_str, "最後進貨時間": now_str  # 初始化
-        }])
+        if not name: return
         
-        if not name:
-            messagebox.showwarning("警告", "請輸入商品名稱")
-            return
-        if name in self.products_df['商品名稱'].values:
-            messagebox.showwarning("已存在", f"商品「{name}」已存在。\n請使用右側更新功能。")
-            return
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            new_row = pd.DataFrame([{"分類Tag": tag, "商品名稱": name, "預設成本": cost, "目前庫存": stock, "最後更新時間": now_str}])
-            df_old = pd.read_excel(FILE_NAME, sheet_name='商品資料')
-            df_updated = pd.concat([df_old, new_row], ignore_index=True)
-            df_updated = df_updated.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
+            new_row = {
+                "分類Tag": self.var_add_tag.get().strip(),
+                "商品名稱": name,
+                "預設成本": 0.0,  # 初始建檔不設成本
+                "目前庫存": 0,    # 初始建檔不設庫存
+                "最後更新時間": now_str,
+                "初始上架時間": now_str,
+                "最後進貨時間": "",
+                "安全庫存": self.var_add_safety.get(),
+                "商品連結": self.var_add_url.get().strip(),
+                "商品備註": self.var_add_remarks.get().strip()
+            }
+            
+            df_new = pd.concat([self.products_df, pd.DataFrame([new_row])], ignore_index=True)
+            # 使用您的全能存檔引擎
+            if self._universal_save({SHEET_PRODUCTS: df_new}):
+                self.products_df = df_new
+                self.update_mgmt_prod_list()
+                self.update_pur_prod_list() # 同步到進貨頁面選單
 
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                 df_updated.to_excel(writer, sheet_name='商品資料', index=False)
-            self.products_df = df_updated
-            self.update_pur_prod_list()
-            self.update_sales_prod_list() 
-            self.update_mgmt_prod_list()  
-            messagebox.showinfo("成功", f"已新增：{name} (庫存: {stock})")
-            self.var_add_name.set("")
-            self.var_add_cost.set(0)
-            self.var_add_stock.set(0)
-        except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
+                if messagebox.askyesno("成功", f"商品「{name}」已建檔！\n是否立即前往『進貨管理』填寫第一筆採購單？"):
+                    # 切換到進貨分頁 (假設 index 是 0)
+                    self.root.nametowidget(self.tab_purchase.master).select(self.tab_purchase)
+                    self.var_pur_sel_name.set(name)
+        except Exception as e:
+            messagebox.showerror("錯誤", str(e))
 
     def submit_update_product(self):
         name = self.var_upd_name.get()
