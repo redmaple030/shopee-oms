@@ -293,7 +293,10 @@ class SalesApp:
                       "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", 
                       "分攤手續費", "扣費項目", "總淨利", "毛利率", "稅額"]
             
-            cols_purchase = ["進貨單號", "進貨日期", "供應商", "物流追蹤編號", "商品名稱", "數量", "進貨單價", "進貨總額", "進項稅額", "備註"]
+            cols_purchase = [
+            "進貨單號", "採購日期", "入庫日期", "供應商", "物流追蹤", 
+            "商品名稱", "數量", "進貨單價", "進貨總額", "進項稅額", "備註"
+        ]
 
             cols_prods = ["分類Tag", "商品名稱", "預設成本", "目前庫存", 
                             "最後更新時間", "初始上架時間", "最後進貨時間", "安全庫存",
@@ -403,15 +406,14 @@ class SalesApp:
 
 
     def setup_purchase_tab(self):
-        """ 建立進貨管理介面：加入稅務勾選 """
+        """ 建立進貨管理介面 (採購下單) """
         self.pur_cart_data = []
         self.var_pur_date = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
         self.var_pur_supplier = tk.StringVar()
-        self.var_pur_logistics = tk.StringVar()
+        # 原本的 logistics 變數移除或改為備註
         self.var_pur_sel_name = tk.StringVar()
         self.var_pur_sel_qty = tk.IntVar(value=1)
         self.var_pur_sel_cost = tk.DoubleVar(value=0.0)
-        # [新增] 進項稅額變數
         self.var_pur_tax_enabled = tk.BooleanVar(value=False)
 
         paned = ttk.PanedWindow(self.tab_purchase, orient=tk.HORIZONTAL)
@@ -421,10 +423,11 @@ class SalesApp:
         left_frame = ttk.LabelFrame(paned, text="1. 填寫採購單", padding=10)
         paned.add(left_frame, weight=1)
 
+        ttk.Label(left_frame, text="採購日期:").pack(anchor="w")
+        ttk.Entry(left_frame, textvariable=self.var_pur_date).pack(fill="x", pady=2)
+
         ttk.Label(left_frame, text="供應商:").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_supplier).pack(fill="x", pady=2)
-        ttk.Label(left_frame, text="物流編號:").pack(anchor="w")
-        ttk.Entry(left_frame, textvariable=self.var_pur_logistics).pack(fill="x", pady=2)
         
         ttk.Separator(left_frame).pack(fill="x", pady=10)
         
@@ -438,76 +441,85 @@ class SalesApp:
         ttk.Label(left_frame, text="數量:").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_sel_qty).pack(fill="x", pady=2)
         
-        # [新增] 稅務勾選框
-        ttk.Checkbutton(left_frame, text="此筆有含 5% 營業稅 (或進口稅)", variable=self.var_pur_tax_enabled).pack(anchor="w", pady=5)
+        ttk.Checkbutton(left_frame, text="此筆有含 5% 營業稅", variable=self.var_pur_tax_enabled).pack(anchor="w", pady=5)
         
         ttk.Button(left_frame, text="加入清單 ↓", command=self.add_to_pur_cart).pack(fill="x", pady=10)
 
-        # 右側：本次採購明細
-        right_frame = ttk.LabelFrame(paned, text="2. 本次採購明細", padding=10)
+        # 右側：購物車預覽
+        right_frame = ttk.LabelFrame(paned, text="2. 本次採購明細 (待送出)", padding=10)
         paned.add(right_frame, weight=2)
         
         self.tree_pur_cart = ttk.Treeview(right_frame, columns=("品名", "量", "價", "稅", "總"), show='headings', height=10)
-        self.tree_pur_cart.heading("品名", text="商品名稱"); self.tree_pur_cart.column("品名", width=150)
-        self.tree_pur_cart.heading("量", text="數量"); self.tree_pur_cart.column("量", width=50)
-        self.tree_pur_cart.heading("價", text="單價"); self.tree_pur_cart.column("價", width=70)
-        self.tree_pur_cart.heading("稅", text="稅額"); self.tree_pur_cart.column("稅", width=70)
-        self.tree_pur_cart.heading("總", text="含稅總額"); self.tree_pur_cart.column("總", width=80)
+        for c in ("品名", "量", "價", "稅", "總"):
+            self.tree_pur_cart.heading(c, text=c)
+            self.tree_pur_cart.column(c, width=80, anchor="center")
         self.tree_pur_cart.pack(fill="both", expand=True)
-
-        # --- [新增] 操作按鈕區 ---
-        pur_btn_area = ttk.Frame(right_frame)
-        pur_btn_area.pack(fill="x", pady=5)
         
-        ttk.Button(pur_btn_area, text="➖ 移除選中商品", command=self.remove_from_pur_cart).pack(side="left", padx=5)
-        ttk.Button(pur_btn_area, text="🚀 送出採購單 (進入追蹤區)", command=self.submit_purchase_batch).pack(side="right", padx=5)
+        btn_area = ttk.Frame(right_frame)
+        btn_area.pack(fill="x", pady=10)
+        ttk.Button(btn_area, text="➖ 移除項目", command=self.remove_from_pur_cart).pack(side="left", padx=5)
+        ttk.Button(btn_area, text="🚀 送出採購單", command=self.submit_purchase_batch).pack(side="right", padx=5)
 
         self.update_pur_prod_list()
 
 
+
     def submit_purchase_batch(self):
-        """ 提交進貨：同時寫入紀錄與追蹤 (含進項稅欄位) """
+        """ 提交採購：寫入採購日期，入庫日期留空 (PM 推薦優化版) """
         if not self.pur_cart_data: return
 
         supplier = self.var_pur_supplier.get().strip()
-        logistics = self.var_pur_logistics.get().strip()
         pur_id = "I" + datetime.now().strftime("%Y%m%d%H%M%S")
         
         try:
+            # 1. 讀取現有資料 (唯讀)
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_history = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
                 df_tracking = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
             
+            # 2. 準備本次新訂單資料
             new_entries = []
             for item in self.pur_cart_data:
                 new_entries.append({
                     "進貨單號": f"'{pur_id}",
-                    "進貨日期": self.var_pur_date.get(),
-                    "供應商": supplier,
-                    "物流追蹤編號": logistics,
+                    "採購日期": self.var_pur_date.get(),
+                    "入庫日期": "",  
+                    "供應商": supplier if supplier else "未填",
+                    "物流追蹤": "待發貨", # 這裡要對齊您 Excel 的標題
                     "商品名稱": item['name'],
                     "數量": item['qty'],
                     "進貨單價": item['cost'],
                     "進貨總額": item['total'],
-                    "進項稅額": item['tax'], # [關鍵] 稅金集中欄位
+                    "進項稅額": item['tax'],
                     "備註": "在途"
                 })
             
             new_df = pd.DataFrame(new_entries)
-            df_history = pd.concat([df_history, new_df], ignore_index=True)
-            df_tracking = pd.concat([df_tracking, new_df], ignore_index=True)
+
+            # 3. 先在記憶體中合併好 (不要在呼叫時才合併，比較好 debug)
+            updated_history = pd.concat([df_history, new_df], ignore_index=True)
+            updated_tracking = pd.concat([df_tracking, new_df], ignore_index=True)
+
+            # 4. 一次性交給萬用引擎存檔
+            # 這種寫法非常清晰：我要更新這兩個分頁，其餘不要動
+            save_data = {
+                SHEET_PURCHASES: updated_history,
+                SHEET_PUR_TRACKING: updated_tracking
+            }
             
-            # 存檔 (保護其他 Sheet)
-            self._universal_save(df_history, df_tracking)
-            
-            messagebox.showinfo("成功", f"採購單 {pur_id} 已建立！資料已同步至追蹤分頁。")
-            
-            # 清空購物車
-            self.pur_cart_data = []
-            for i in self.tree_pur_cart.get_children(): self.tree_pur_cart.delete(i)
-            self.load_purchase_tracking()
+            if self._universal_save(save_data):
+                messagebox.showinfo("成功", f"採購單 {pur_id} 已建立！")
+                
+                # 5. 成功後的 UI 清理
+                self.pur_cart_data = []
+                for i in self.tree_pur_cart.get_children(): 
+                    self.tree_pur_cart.delete(i)
+                self.load_purchase_tracking()
+                # 同步更新分析數據
+                self.calculate_analysis_data()
+
         except Exception as e:
-            messagebox.showerror("錯誤", str(e))
+            messagebox.showerror("錯誤", f"建立採購單失敗: {str(e)}")
 
 
     def remove_from_pur_cart(self):
@@ -552,29 +564,29 @@ class SalesApp:
 
 
     def setup_pur_tracking_tab(self):
-        """ 建立獨立的在途貨物追蹤頁面 """
+        """ 建立獨立的在途貨物追蹤頁面：增加編輯物流號功能 """
         frame = self.tab_pur_tracking
         
         top_frame = ttk.Frame(frame, padding=5)
         top_frame.pack(fill="x")
-        ttk.Label(top_frame, text="🚚 這些貨物目前正在運輸中，收到貨物後請點選『確認收貨』執行入庫。", foreground="blue").pack(side="left")
-        ttk.Button(top_frame, text="🔄 刷新追蹤列表", command=self.load_purchase_tracking).pack(side="right")
+        ttk.Label(top_frame, text="🚚 運輸中貨物管理 (可在發貨後補充物流單號)", foreground="blue").pack(side="left")
+        ttk.Button(top_frame, text="🔄 刷新列表", command=self.load_purchase_tracking).pack(side="right")
 
         # 列表
         self.tree_pur_track = ttk.Treeview(frame, columns=("單號", "供應商", "商品", "數量", "單價", "稅額", "物流號"), show='headings')
         for c in ("單號", "供應商", "商品", "數量", "單價", "稅額", "物流號"):
             self.tree_pur_track.heading(c, text=c)
-            self.tree_pur_track.column(c, width=100)
+            self.tree_pur_track.column(c, width=100, anchor="center")
         self.tree_pur_track.pack(fill="both", expand=True, padx=10)
 
         # 操作區
         btn_ctrl = ttk.Frame(frame, padding=10)
         btn_ctrl.pack(fill="x")
-        ttk.Button(btn_ctrl, text="✅ 確認收貨 (入庫與加權成本)", command=self.action_confirm_inbound).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="✏️ 補充物流單號", command=self.action_update_pur_logistics).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="✅ 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="❌ 標記遺失/取消", command=self.action_cancel_purchase).pack(side="left", padx=5)
 
         self.load_purchase_tracking()
-
 
 
        # ================= 營收與商品分析 (新功能) =================
@@ -1381,28 +1393,36 @@ class SalesApp:
 
 
     def setup_product_tab(self):
-        #""" 建立商品資料管理：身分與價值分離模式 """
-        # 初始化變數
-        self.var_add_tag = tk.StringVar(); self.var_add_name = tk.StringVar()
-        self.var_add_url = tk.StringVar(); self.var_add_remarks = tk.StringVar()
+        """ [修正版] 建立商品資料管理：修正 Tag 讀取與及時搜尋功能 """
+        # --- 1. 初始化變數 ---
+        self.var_add_tag = tk.StringVar()
+        self.var_add_name = tk.StringVar()
+        self.var_add_url = tk.StringVar()
+        self.var_add_remarks = tk.StringVar()
         self.var_add_safety = tk.IntVar(value=0)
 
-        self.var_upd_tag = tk.StringVar(); self.var_upd_name = tk.StringVar()
-        self.var_upd_url = tk.StringVar(); self.var_upd_remarks = tk.StringVar()
+        self.var_upd_tag = tk.StringVar()
+        self.var_upd_name = tk.StringVar()
+        self.var_upd_url = tk.StringVar()
+        self.var_upd_remarks = tk.StringVar()
         self.var_upd_safety = tk.IntVar(value=0)
         self.var_upd_stock = tk.IntVar(value=0)
         self.var_upd_cost = tk.DoubleVar(value=0.0)
         self.var_upd_time = tk.StringVar(value="尚未選擇商品")
 
+        # 主容器
         paned = ttk.PanedWindow(self.tab_products, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # --- 1. 左側：新商品建檔 (身分證) ---
+        # --- 2. 左側：新商品建檔 (身分證) ---
         frame_left = ttk.LabelFrame(paned, text="🆕 新商品身分建檔", padding=15)
         paned.add(frame_left, weight=1)
 
         ttk.Label(frame_left, text="1. 分類 Tag:").pack(anchor="w")
-        ttk.Combobox(frame_left, textvariable=self.var_add_tag).pack(fill="x", pady=3)
+        # 【修正】指定給 self 變數並綁定點擊事件
+        self.combo_add_tag = ttk.Combobox(frame_left, textvariable=self.var_add_tag)
+        self.combo_add_tag.pack(fill="x", pady=3)
+        self.combo_add_tag.bind('<Button-1>', self.load_existing_tags)
         
         ttk.Label(frame_left, text="2. 商品名稱:").pack(anchor="w")
         ttk.Entry(frame_left, textvariable=self.var_add_name).pack(fill="x", pady=3)
@@ -1418,11 +1438,15 @@ class SalesApp:
 
         ttk.Button(frame_left, text="✅ 完成建檔", command=self.submit_new_product).pack(fill="x", pady=20)
 
-        # --- 2. 右側：資料查詢與維護 ---
+        # --- 3. 右側：資料查詢與維護 ---
         frame_right = ttk.LabelFrame(paned, text="🔍 商品資料維護", padding=15)
         paned.add(frame_right, weight=1)
 
-        ttk.Entry(frame_right, textvariable=self.var_mgmt_search).pack(fill="x")
+        # 【修正】搜尋框綁定 KeyRelease 事件，達成及時搜尋
+        ent_search = ttk.Entry(frame_right, textvariable=self.var_mgmt_search)
+        ent_search.pack(fill="x")
+        ent_search.bind('<KeyRelease>', lambda e: self.update_mgmt_prod_list())
+
         self.listbox_mgmt = tk.Listbox(frame_right, height=8)
         self.listbox_mgmt.pack(fill="both", expand=True, pady=5)
         self.listbox_mgmt.bind('<<ListboxSelect>>', self.on_mgmt_prod_select)
@@ -1434,8 +1458,12 @@ class SalesApp:
         
         ttk.Label(edit_frame, text="名稱:").grid(row=0, column=0, **e_opts)
         ttk.Entry(edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=0, column=1, sticky="ew")
+        
         ttk.Label(edit_frame, text="Tag:").grid(row=0, column=2, **e_opts)
-        ttk.Entry(edit_frame, textvariable=self.var_upd_tag).grid(row=0, column=3, sticky="ew")
+        # 【修正】編輯區的 Tag 也改用 Combobox 方便選取
+        self.combo_upd_tag = ttk.Combobox(edit_frame, textvariable=self.var_upd_tag)
+        self.combo_upd_tag.grid(row=0, column=3, sticky="ew")
+        self.combo_upd_tag.bind('<Button-1>', self.load_existing_tags)
 
         ttk.Label(edit_frame, text="採購連結:").grid(row=1, column=0, **e_opts)
         ttk.Entry(edit_frame, textvariable=self.var_upd_url).grid(row=1, column=1, columnspan=3, sticky="ew")
@@ -1445,19 +1473,21 @@ class SalesApp:
 
         ttk.Label(edit_frame, text="庫存量:").grid(row=3, column=0, **e_opts)
         ttk.Entry(edit_frame, textvariable=self.var_upd_stock).grid(row=3, column=1, sticky="ew")
+        
         ttk.Label(edit_frame, text="安全量:").grid(row=3, column=2, **e_opts)
         ttk.Entry(edit_frame, textvariable=self.var_upd_safety).grid(row=3, column=3, sticky="ew")
 
         ttk.Label(edit_frame, text="加權成本:").grid(row=4, column=0, **e_opts)
         ttk.Entry(edit_frame, textvariable=self.var_upd_cost).grid(row=4, column=1, sticky="ew")
 
+        # 按鈕區
         btn_f = ttk.Frame(edit_frame)
         btn_f.grid(row=5, column=0, columnspan=4, pady=10)
         ttk.Button(btn_f, text="💾 儲存修改", command=self.submit_update_product).pack(side="left", padx=5)
         ttk.Button(btn_f, text="🗑️ 刪除商品", command=self.delete_product).pack(side="left", padx=5)
 
+        # 初始載入清單
         self.update_mgmt_prod_list()
-
 
     def setup_tracking_tab(self):
         """ 建立訂單追蹤區 (緩衝區) """
@@ -1629,26 +1659,57 @@ class SalesApp:
                     cols_to_inherit = ['日期', '交易平台', '買家名稱', '寄送方式', '取貨地點', '扣費項目']
                     for col in cols_to_inherit: df.at[new_header_idx, col] = df.at[idx, col]
             df.drop(idx, inplace=True)
-            self._save_all_sheets(df, SHEET_TRACKING)
+            self._universal_save({ SHEET_TRACKING: df })
             messagebox.showinfo("成功", "商品已刪除"); self.load_tracking_data()
         except Exception as e: messagebox.showerror("錯誤", f"刪除失敗: {e}")
 
     def action_track_delete_order(self):
-        """ 刪除整筆訂單 """
+        """ 刪除整筆訂單：強化比對邏輯，確保刪除成功 """
         sel = self.tree_track.selection()
-        if not sel: return
-        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0])
-        if not messagebox.askyesno("刪除整筆", f"確定要刪除訂單 [{order_id}] 嗎？"): return
+        if not sel:
+            messagebox.showwarning("提示", "請先選擇要刪除的訂單項目")
+            return
+        
+        # 1. 取得介面上的訂單編號，並清理乾淨
+        item = self.tree_track.item(sel[0])
+        order_id = str(item['values'][0]).replace("'", "").strip()
+        
+        if not messagebox.askyesno("刪除確認", f"確定要刪除訂單 [{order_id}] 嗎？\n該訂單內的所有商品都會消失！"):
+            return
+
         try:
+            # 2. 讀取目前的追蹤清單
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
-            df_new = df[df['訂單編號'] != order_id]
-            self._save_all_sheets(df_new, SHEET_TRACKING)
-            messagebox.showinfo("成功", "整筆訂單已刪除"); self.load_tracking_data()
-        except Exception as e: messagebox.showerror("錯誤", f"刪除失敗: {e}")
+            
+            # 3. 【關鍵修正】：統一 Excel 內的編號格式以便比對
+            # 全部轉字串 -> 去掉單引號 -> 去掉 .0
+            df['訂單編號_清理'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
+            
+            # 檢查是否存在該編號 (Debug 用)
+            if order_id not in df['訂單編號_清理'].values:
+                # 如果找不到，嘗試再次模糊比對
+                messagebox.showwarning("刪除失敗", f"在資料庫中找不到編號: {order_id}\n請嘗試手動『重新整理』後再試一次。")
+                return
+
+            # 4. 執行過濾：只留下「不等於」該編號的資料
+            df_new = df[df['訂單編號_清理'] != order_id].copy()
+            
+            # 刪除輔助欄位
+            df_new.drop(columns=['訂單編號_清理'], inplace=True)
+
+            # 5. 調用萬用存檔引擎 (字典格式)
+            save_success = self._universal_save({SHEET_TRACKING: df_new})
+            
+            if save_success:
+                messagebox.showinfo("成功", f"訂單 {order_id} 已從系統中移除。")
+                # 6. 強制刷新介面
+                self.load_tracking_data()
+                
+        except Exception as e:
+            messagebox.showerror("錯誤", f"刪除操作失敗: {str(e)}")
 
     def action_track_return_order(self):
-        #""" 退貨整筆訂單 """
+        """ 退貨整筆訂單 (修正存檔格式) """
         from tkinter import simpledialog
         sel = self.tree_track.selection()
         if not sel: return
@@ -1662,7 +1723,7 @@ class SalesApp:
             mask = df_track['訂單編號'] == order_id
             rows_to_return = df_track[mask].copy()
             info = self._get_full_order_info(df_track, order_id)
-            for col, val in info.items(): rows_to_return[col] = val # 補齊資料
+            for col, val in info.items(): rows_to_return[col] = val
             rows_to_return['備註'] = reason
             
             try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
@@ -1670,9 +1731,15 @@ class SalesApp:
             df_returns = pd.concat([df_returns, rows_to_return], ignore_index=True)
             df_track_new = df_track[~mask]
             
-            self._universal_save(df_track_new, SHEET_TRACKING, df_returns, SHEET_RETURNS)
-            messagebox.showinfo("成功", f"訂單 {order_id} 整筆已移至退貨。")
-            self.load_tracking_data(); self.load_returns_data()
+            # ---【關鍵修正：使用大括號字典傳參】---
+            success = self._universal_save({
+                SHEET_TRACKING: df_track_new, 
+                SHEET_RETURNS: df_returns
+            })
+            
+            if success:
+                messagebox.showinfo("成功", f"訂單 {order_id} 整筆已移至退貨。")
+                self.load_tracking_data(); self.load_returns_data()
         except Exception as e: messagebox.showerror("錯誤", str(e))
 
     def _save_all_sheets(self, df_target, target_sheet_name):
@@ -2304,6 +2371,8 @@ class SalesApp:
 
         try:
             # 1. 讀取核心分頁 (只需要讀取要修改的這三個，其餘由引擎處理)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
                 df_tracking = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
@@ -2334,31 +2403,28 @@ class SalesApp:
             # 3. 【同步更新進貨總帳】將歷史紀錄中的備註改為「已完成」
             # 利用單號與品名進行精準匹配
             mask = (df_history['進貨單號'].astype(str).str.contains(pur_id)) & (df_history['商品名稱'] == p_name)
-            df_history.loc[mask, '備註'] = "已完成"
+            df_history.loc[mask, '入庫日期'] = today_str # 自動補日期
+            df_history.loc[mask, '備註'] = "已入庫"
 
-            # 4. 【刪除待辦清單】從追蹤分頁移除該列
+            # 4. 【刪除待辦清單】從追蹤表刪除
             df_tracking.drop(idx_in_df, inplace=True)
 
             # 5. 【關鍵：調用萬用存檔引擎】
             # 這會自動處理：其他所有 Sheet 的保留、ID 保護、日期排序、一次性寫回
             save_success = self._universal_save({
                 SHEET_PRODUCTS: df_prods,
-                SHEET_PUR_TRACKING: df_tracking,
-                SHEET_PURCHASES: df_history
+                SHEET_PUR_TRACKING: df_tracking, # 這是 drop 掉該行後的 df
+                SHEET_PURCHASES: df_history     # 這是更新備註後的 df
             })
 
             if save_success:
-                messagebox.showinfo("入庫成功", f"商品「{p_name}」已增加庫存。\n新加權成本為: ${df_prods.at[p_idx, '預設成本']}")
-                
-                # 重新載入介面數據
+                messagebox.showinfo("成功", "已完成收貨入庫！")
                 self.load_purchase_tracking()
                 self.products_df = self.load_products()
-                self.update_sales_prod_list() 
-                self.update_mgmt_prod_list()
-                self.calculate_analysis_data() # 同步更新分析數據
-
+                self.update_sales_prod_list()
         except Exception as e:
-            messagebox.showerror("錯誤", f"入庫失敗: {str(e)}")
+            messagebox.showerror("錯誤", str(e))
+
 
 
     def update_pur_prod_list(self):
@@ -2505,6 +2571,65 @@ class SalesApp:
                 ))
         except: pass
 
+
+    def action_update_pur_logistics(self):
+        """ 彈出視窗讓使用者補充物流單號，並同步更新紀錄與追蹤表 """
+        from tkinter import simpledialog # 確保匯入對話框組件
+        
+        # 1. 檢查是否有選取項目
+        sel = self.tree_pur_track.selection()
+        if not sel:
+            messagebox.showwarning("提示", "請先從列表中選擇一個進貨項目")
+            return
+        
+        # 取得選中行的資料
+        item = self.tree_pur_track.item(sel[0])
+        idx_in_track_df = int(item['text']) # 取得 DataFrame 的索引
+        # 取得單號 (values[0]) 與 商品名 (values[2])
+        pur_id = str(item['values'][0]).replace("'", "")
+        p_name = item['values'][2]
+
+        # 2. 彈出對話框詢問單號
+        new_logistics = simpledialog.askstring(
+            "補充物流資訊", 
+            f"進貨單號：{pur_id}\n商品：{p_name}\n\n請輸入新的物流追蹤編號：", 
+            parent=self.root
+        )
+        
+        # 如果使用者按取消或是沒填，就結束
+        if new_logistics is None: return 
+        new_logistics = new_logistics.strip()
+
+        try:
+            # 3. 讀取相關分頁
+            with pd.ExcelFile(FILE_NAME) as xls:
+                df_tracking = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
+                df_history = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
+
+            # 4. 更新「進貨追蹤」分頁 (根據目前的 Row Index)
+            df_tracking.at[idx_in_track_df, '物流追蹤'] = new_logistics
+
+            # 5. 更新「進貨紀錄」總帳 (根據單號與品名進行精準比對)
+            # 因為一張單可能有多項商品，我們只更新選中的那一項，或您也可以設定為更新整張單
+            mask = (df_history['進貨單號'].astype(str).str.contains(pur_id)) & (df_history['商品名稱'] == p_name)
+            
+            if not df_history[mask].empty:
+                df_history.loc[mask, '物流追蹤'] = new_logistics
+            
+            # 6. 使用萬用引擎存檔 (傳入字典格式)
+            success = self._universal_save({
+                SHEET_PUR_TRACKING: df_tracking,
+                SHEET_PURCHASES: df_history
+            })
+
+            if success:
+                messagebox.showinfo("成功", f"單號 {pur_id} 的物流編號已更新為：\n{new_logistics}")
+                # 重新整理介面列表
+                self.load_purchase_tracking()
+
+        except Exception as e:
+            messagebox.showerror("錯誤", f"更新物流編號失敗：{str(e)}")
+
     
     def action_track_delete_item(self):
         """ 刪除單一商品 (含表頭自動遞補邏輯) """
@@ -2554,7 +2679,7 @@ class SalesApp:
             df.drop(idx, inplace=True)
             
             # 寫回 Excel (保留其他分頁)
-            self._save_all_sheets(df, SHEET_TRACKING)
+            self._universal_save({ SHEET_TRACKING: df })
             
             messagebox.showinfo("成功", "商品已刪除，訂單資料已自動修正。")
             self.load_tracking_data()
@@ -2578,8 +2703,10 @@ class SalesApp:
                 '取貨地點': h['取貨地點']
             }
         return {}
+    
+
     def action_track_return_item(self):
-        """ 退貨單一商品 (含自動補足詳情與補位) """
+        """ 退貨單一商品 (修正存檔格式) """
         from tkinter import simpledialog
         sel = self.tree_track.selection()
         if not sel: return
@@ -2596,16 +2723,12 @@ class SalesApp:
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
             df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
 
-            # 1. 取得這張訂單的完整資訊 (避免移走的是沒名字的那行)
             info = self._get_full_order_info(df_track, order_id)
-            
-            # 2. 準備要移走的這行資料，並補滿詳情
             row_to_move = df_track.loc[[idx]].copy()
-            for col, val in info.items():
-                row_to_move[col] = val
+            for col, val in info.items(): row_to_move[col] = val
             row_to_move['備註'] = reason
 
-            # 3. 處理追蹤表的補位邏輯
+            # 補位邏輯
             is_header = pd.notna(df_track.at[idx, '日期']) and str(df_track.at[idx, '日期']) != ""
             if is_header:
                 others = df_track[(df_track['訂單編號'] == order_id) & (df_track.index != idx)].index.tolist()
@@ -2613,78 +2736,57 @@ class SalesApp:
                     new_h = others[0]
                     for col in info.keys(): df_track.at[new_h, col] = df_track.at[idx, col]
 
-            # 4. 執行移動
             df_track.drop(idx, inplace=True)
             try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
             except: df_returns = pd.DataFrame()
             df_returns = pd.concat([df_returns, row_to_move], ignore_index=True)
 
-            # 5. 存檔
-            self._universal_save(df_track, SHEET_TRACKING, df_returns, SHEET_RETURNS)
-            messagebox.showinfo("成功", f"商品「{prod_name}」已單獨移至退貨紀錄。")
-            self.load_tracking_data(); self.load_returns_data()
+            # ---【關鍵修正：使用大括號字典傳參】---
+            success = self._universal_save({
+                SHEET_TRACKING: df_track, 
+                SHEET_RETURNS: df_returns
+            })
+            
+            if success:
+                messagebox.showinfo("成功", f"商品「{prod_name}」已移至退貨紀錄。")
+                self.load_tracking_data(); self.load_returns_data()
         except Exception as e: messagebox.showerror("錯誤", str(e))
 
+
+    
     def action_track_complete_order(self):
-        """ 完成訂單 (整筆結案：移至銷售紀錄並自動排序) """
+        """ 完成訂單/整筆結案 (修正存檔格式) """
         sel = self.tree_track.selection()
         if not sel: return
-        item = self.tree_track.item(sel[0])
-        order_id = str(item['values'][0]).replace("'", "")
+        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0]).replace("'", "")
 
-        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？\n這將會把整筆訂單移至銷售紀錄並自動按日期排序。"):
-            return
+        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？"): return
 
         try:
-            # 1. 讀取追蹤表與歷史表
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
-            
-            # 統一格式化編號
             df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
-            df_sales['訂單編號'] = df_sales['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            
+            try: df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
+            except: df_sales = pd.DataFrame()
 
-            # 2. 提取並補齊新結案的資料
             mask = df_track['訂單編號'] == order_id
             rows_to_finish = df_track[mask].copy()
             info = self._get_full_order_info(df_track, order_id)
-            for col, val in info.items():
-                rows_to_finish[col] = val
+            for col, val in info.items(): rows_to_finish[col] = val
 
-            # 3. 合併舊資料與新資料
             df_sales_combined = pd.concat([df_sales, rows_to_finish], ignore_index=True)
-
-            # --- [核心排序邏輯] ---
-            # 將日期轉為 datetime 格式以便精準排序
-            df_sales_combined['tmp_date'] = pd.to_datetime(df_sales_combined['日期'], errors='coerce')
-            
-            # 排序：日期由新到舊 (descending)，訂單編號也由新到舊
-            # 這樣可以確保「最新結案」或「日期最新」的永遠在 Excel 最上方
-            df_sales_combined = df_sales_combined.sort_values(
-                by=['tmp_date', '訂單編號'], 
-                ascending=[False, False]
-            ).drop(columns=['tmp_date']) # 刪除暫存的排序欄位
-            # ----------------------
-
-            # 4. 從追蹤表移除
             df_track_new = df_track[~mask]
 
-            # 5. 存檔 (呼叫我們之前寫的保護編號函式)
+            # ---【關鍵修正：使用大括號字典傳參】---
             success = self._universal_save({
                 SHEET_TRACKING: df_track_new, 
                 SHEET_SALES: df_sales_combined
             })
+            
             if success:
                 messagebox.showinfo("成功", f"訂單 {order_id} 已結案！")
-                self.load_tracking_data()
-            
-            messagebox.showinfo("成功", f"訂單 {order_id} 已結案並完成日期歸檔。")
-            self.load_tracking_data()
-            self.load_sales_records_for_edit() # 更新歷史列表
-            self.calculate_analysis_data()    # 更新營收分析
-            
-        except Exception as e:
-            messagebox.showerror("錯誤", f"結案失敗: {str(e)}")
+                self.load_tracking_data(); self.calculate_analysis_data()
+        except Exception as e: messagebox.showerror("錯誤", str(e))
 
     def _universal_save(self, updates_dict):
         """
@@ -2754,10 +2856,15 @@ class SalesApp:
     
 
     def load_existing_tags(self, event=None):
-        if not self.products_df.empty and "分類Tag" in self.products_df.columns:
-            tags = self.products_df["分類Tag"].dropna().unique().tolist()
-            self.combo_add_tag['values'] = tags
-            self.combo_upd_tag['values'] = tags
+        """ 從目前的商品資料中抓取不重複的分類 """
+        if not self.products_df.empty:
+            tags = sorted([str(t) for t in self.products_df["分類Tag"].dropna().unique() if str(t).strip() != ""])
+            # 同步更新兩個下拉選單
+            if hasattr(self, 'combo_add_tag'):
+                self.combo_add_tag['values'] = tags
+            if hasattr(self, 'combo_upd_tag'):
+                self.combo_upd_tag['values'] = tags
+
 
     def toggle_cust_info(self):
         state = "normal" if self.var_enable_cust.get() else "disabled"
@@ -2924,32 +3031,25 @@ class SalesApp:
             return 0, 0, 0
         
     def submit_order(self):
+        """ 修正版：送出訂單至追蹤區，確保不覆蓋舊有資料 """
         if not self.cart_data: return
         
-        # --- 1. 資料清洗 ---
         def clean_text(text):
             if not text: return ""
             return text.replace("\n", "").replace("\r", "").strip()
 
-        # --- 2. 讀取介面資料 ---
         if self.var_enable_cust.get():
             cust_name = clean_text(self.var_cust_name.get())
             cust_loc = clean_text(self.var_cust_loc.get())
             ship_method = self.var_ship_method.get()
             platform_name = self.var_platform.get()
         else:
-            cust_name = ""
-            cust_loc = ""
-            ship_method = ""
-            platform_name = ""
+            cust_name = "" ; cust_loc = "" ; ship_method = "" ; platform_name = ""
             
         date_str = self.var_date.get().strip()
-
-        # --- 3. 生成訂單編號 ---
         now = datetime.now()
         order_id = now.strftime("%Y%m%d%H%M%S") 
 
-        # --- 4. 計算金額 ---
         t_sales, t_fee, t_tax = self.update_totals() 
         fee_tag = self.var_fee_tag.get()
         try: extra_val = float(self.var_extra_fee.get())
@@ -2961,86 +3061,68 @@ class SalesApp:
             rows = []
             out_of_stock_warnings = [] 
             
-            # 讀取商品資料以更新庫存
-            df_prods_current = pd.read_excel(FILE_NAME, sheet_name='商品資料')
+            # 1. 讀取目前的商品資料 (用於更新庫存)
+            df_prods_current = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
 
+            # 2. 準備本次新訂單的資料列
             for i, item in enumerate(self.cart_data):
-                # 第一筆商品才顯示表頭，其餘留白
                 if i == 0:
-                    row_date = date_str
-                    row_platform = platform_name 
-                    row_buyer = cust_name
-                    row_ship = ship_method
-                    row_loc = cust_loc
+                    row_date, row_platform, row_buyer, row_ship, row_loc = date_str, platform_name, cust_name, ship_method, cust_loc
                 else:
-                    row_date = ""
-                    row_platform = "" 
-                    row_buyer = ""
-                    row_ship = ""
-                    row_loc = ""
+                    row_date = row_platform = row_buyer = row_ship = row_loc = ""
 
                 ratio = item['total_sales'] / t_sales if t_sales > 0 else 0
                 alloc_fee = t_fee * ratio
-                alloc_tax = t_tax * ratio # 分攤稅額
+                alloc_tax = t_tax * ratio 
                 
                 net = item['total_sales'] - item['total_cost'] - alloc_fee - alloc_tax
                 margin_pct = (net / item['total_sales']) * 100 if item['total_sales'] > 0 else 0.0
 
                 rows.append({
                     "訂單編號": order_id,
-                    "日期": row_date, 
-                    "買家名稱": row_buyer,     
-                    "交易平台": row_platform,  
-                    "寄送方式": row_ship, 
-                    "取貨地點": row_loc,
-                    "商品名稱": item['name'], 
-                    "數量": item['qty'], 
-                    "單價(售)": item['unit_price'], 
-                    "單價(進)": item['unit_cost'],
-                    "總銷售額": item['total_sales'], 
-                    "總成本": item['total_cost'], 
-                    "分攤手續費": round(alloc_fee, 2),
-                    "扣費項目": fee_tag, 
-                    "總淨利": round(net, 2),
-                    "毛利率": round(margin_pct, 1),
-                    "稅額": round(alloc_tax, 2)
-
+                    "日期": row_date, "買家名稱": row_buyer, "交易平台": row_platform,  
+                    "寄送方式": row_ship, "取貨地點": row_loc,
+                    "商品名稱": item['name'], "數量": item['qty'], 
+                    "單價(售)": item['unit_price'], "單價(進)": item['unit_cost'],
+                    "總銷售額": item['total_sales'], "總成本": item['total_cost'], 
+                    "分攤手續費": round(alloc_fee, 2), "扣費項目": fee_tag, 
+                    "總淨利": round(net, 2), "毛利率": round(margin_pct, 1), "稅額": round(alloc_tax, 2)
                 })
 
-                # 庫存扣除
+                # 庫存扣除邏輯
                 prod_name = item['name']
                 sold_qty = item['qty']
                 idxs = df_prods_current[df_prods_current['商品名稱'] == prod_name].index
                 if not idxs.empty:
                     target_idx = idxs[0]
-                    raw_stock = df_prods_current.at[target_idx, '目前庫存']
-                    try: current = int(raw_stock)
-                    except: current = 0
-                    new_stock = current - sold_qty
-                    df_prods_current.at[target_idx, '目前庫存'] = new_stock
-                    if new_stock <= 0:
-                        out_of_stock_warnings.append(f"● {prod_name} (剩餘: {new_stock})")
+                    curr_stock = df_prods_current.at[target_idx, '目前庫存']
+                    df_prods_current.at[target_idx, '目前庫存'] = curr_stock - sold_qty
+                    if (curr_stock - sold_qty) <= 0:
+                        out_of_stock_warnings.append(f"● {prod_name}")
 
-            # --- 寫入 Excel (商品資料) ---
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                df_prods_current = df_prods_current.sort_values(by=['分類Tag', '商品名稱'], na_position='last')
-                df_prods_current.to_excel(writer, sheet_name='商品資料', index=False)
+            # 3. 【核心修正點】：讀取「訂單追蹤」中原本就有的資料，並與新訂單合併
+            try:
+                df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            except:
+                df_track_existing = pd.DataFrame()
 
-            # --- 寫入 Excel (銷售紀錄) ---
-            df_sales_new = pd.DataFrame(rows)
-            df_sales_new['訂單編號'] = df_sales_new['訂單編號'].apply(lambda x: f"'{x}")
+            df_sales_new_batch = pd.DataFrame(rows)
+            # 強制補上單引號保護編號
+            df_sales_new_batch['訂單編號'] = df_sales_new_batch['訂單編號'].apply(lambda x: f"'{x}")
 
-            excel_columns_order = [
-                "訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
-                "商品名稱", "數量", "單價(售)", "單價(進)", 
-                "總銷售額", "總成本", "分攤手續費", "扣費項目", "總淨利", "毛利率", "稅額"
-            ]
-            df_sales_new = df_sales_new[excel_columns_order]
+            # 合併新舊追蹤資料
+            df_track_combined = pd.concat([df_track_existing, df_sales_new_batch], ignore_index=True)
 
-            # 呼叫萬用存檔引擎，一次更新兩個 Sheet，保護其他所有 Sheet
+            # 確保欄位順序正確
+            excel_columns_order = ["訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
+                                  "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", 
+                                  "分攤手續費", "扣費項目", "總淨利", "毛利率", "稅額"]
+            df_track_combined = df_track_combined[excel_columns_order]
+
+            # 4. 調用全能存檔引擎：一次更新商品與追蹤表，保護其他分頁
             save_success = self._universal_save({
                 SHEET_PRODUCTS: df_prods_current, 
-                SHEET_TRACKING: df_sales_new
+                SHEET_TRACKING: df_track_combined
             })
 
             if save_success:
@@ -3048,35 +3130,33 @@ class SalesApp:
                 self.update_sales_prod_list()
                 self.update_mgmt_prod_list()
                 self.load_tracking_data() 
-                messagebox.showinfo("成功", f"訂單 {order_id} 已送至追蹤區！")
+                messagebox.showinfo("成功", f"訂單 {order_id} 已成功加入追蹤區！")
 
+                # 清空介面
+                self.cart_data = []
+                for i in self.tree.get_children(): self.tree.delete(i)
+                self.update_totals()
+                self.var_cust_name.set(""); self.var_cust_loc.set(""); self.var_sel_stock_info.set("--")
 
-            # 清空購物車欄位
-            self.cart_data = []
-            for i in self.tree.get_children(): self.tree.delete(i)
-            self.update_totals()
-            self.var_cust_name.set("")
-            self.var_cust_loc.set("")
-            self.var_sel_stock_info.set("--")
-
-        except PermissionError: 
-            messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
-        except KeyError as e:
-            messagebox.showerror("錯誤", f"欄位名稱不符，請檢查 Excel 標題: {str(e)}")
         except Exception as e: 
             messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
 
-    def update_mgmt_prod_list(self, event=None):
+    def update_mgmt_prod_list(self):
+        """ 及時更新商品管理清單 (過濾關鍵字) """
         search_term = self.var_mgmt_search.get().lower()
         self.listbox_mgmt.delete(0, tk.END)
+        
         if not self.products_df.empty:
             for index, row in self.products_df.iterrows():
                 p_name = str(row['商品名稱'])
                 p_tag = str(row['分類Tag']) if pd.notna(row['分類Tag']) else "無"
+                
                 try: p_stock = int(row['目前庫存'])
                 except: p_stock = 0
+                
                 display_str = f"[{p_tag}] {p_name} (庫存: {p_stock})"
                 
+                # 如果關鍵字出現在名稱或分類中，就顯示出來
                 if search_term in p_name.lower() or search_term in p_tag.lower():
                     self.listbox_mgmt.insert(tk.END, display_str)
 
@@ -3085,54 +3165,63 @@ class SalesApp:
         if selection:
             display_str = self.listbox_mgmt.get(selection[0])
             try:
+                # 解析顯示字串以取得商品名稱
                 temp = display_str.rsplit(" (庫存:", 1)[0]
                 selected_name = temp.split("]", 1)[1].strip() if "]" in temp else temp
             except:
-                selected_name = display_str
+                return
 
             record = self.products_df[self.products_df['商品名稱'] == selected_name]
             if not record.empty:
                 row = record.iloc[0]
+                # --- 同步填入所有欄位 ---
                 self.var_upd_name.set(row['商品名稱'])
-                self.var_upd_tag.set(row['分類Tag'] if pd.notna(row['分類Tag']) else "")
+                self.var_upd_tag.set(row.get('分類Tag', '')) # 確保 Tag 同步
+                self.var_upd_url.set(row.get('商品連結', ''))
+                self.var_upd_remarks.set(row.get('商品備註', ''))
+                self.var_upd_safety.set(row.get('安全庫存', 0))
+                self.var_upd_stock.set(row['目前庫存'])
                 self.var_upd_cost.set(row['預設成本'])
-                try: current_stock = int(row['目前庫存'])
-                except: current_stock = 0
-                self.var_upd_stock.set(current_stock)
-                self.var_upd_time.set(row['最後更新時間'] if pd.notna(row['最後更新時間']) else "未知")
+                self.var_upd_time.set(row['最後更新時間'])
 
     def submit_new_product(self):
+        """ 建立新商品：URL 與 備註改為選填 """
         name = self.var_add_name.get().strip()
-        if not name: return
+        if not name:
+            messagebox.showwarning("警告", "『商品名稱』為必填項目！")
+            return
         
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            # 讀取 URL 與 備註，如果為空則填入 "無"
+            url = self.var_add_url.get().strip()
+            remarks = self.var_add_remarks.get().strip()
+
             new_row = {
-                "分類Tag": self.var_add_tag.get().strip(),
+                "分類Tag": self.var_add_tag.get().strip() if self.var_add_tag.get() else "未分類",
                 "商品名稱": name,
-                "預設成本": 0.0,  # 初始建檔不設成本
-                "目前庫存": 0,    # 初始建檔不設庫存
+                "預設成本": 0.0,
+                "目前庫存": 0,
                 "最後更新時間": now_str,
                 "初始上架時間": now_str,
                 "最後進貨時間": "",
                 "安全庫存": self.var_add_safety.get(),
-                "商品連結": self.var_add_url.get().strip(),
-                "商品備註": self.var_add_remarks.get().strip()
+                "商品連結": url if url else "無",     # 選填
+                "商品備註": remarks if remarks else "無" # 選填
             }
             
             df_new = pd.concat([self.products_df, pd.DataFrame([new_row])], ignore_index=True)
-            # 使用您的全能存檔引擎
+            
+            # ---【核心修正：使用字典呼叫萬用引擎】---
             if self._universal_save({SHEET_PRODUCTS: df_new}):
                 self.products_df = df_new
                 self.update_mgmt_prod_list()
-                self.update_pur_prod_list() # 同步到進貨頁面選單
-
-                if messagebox.askyesno("成功", f"商品「{name}」已建檔！\n是否立即前往『進貨管理』填寫第一筆採購單？"):
-                    # 切換到進貨分頁 (假設 index 是 0)
-                    self.root.nametowidget(self.tab_purchase.master).select(self.tab_purchase)
-                    self.var_pur_sel_name.set(name)
+                self.update_pur_prod_list()
+                messagebox.showinfo("成功", f"商品「{name}」已建檔！")
+                # 清空輸入
+                self.var_add_name.set(""); self.var_add_url.set(""); self.var_add_remarks.set("")
         except Exception as e:
-            messagebox.showerror("錯誤", str(e))
+            messagebox.showerror("錯誤", f"建檔失敗: {e}")
 
     def submit_update_product(self):
         name = self.var_upd_name.get()
@@ -3229,4 +3318,3 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
-
