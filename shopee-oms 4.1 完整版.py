@@ -1415,7 +1415,7 @@ class SalesApp:
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
         # --- 2. 左側：新商品建檔 (身分證) ---
-        frame_left = ttk.LabelFrame(paned, text="🆕 新商品身分建檔", padding=15)
+        frame_left = ttk.LabelFrame(paned, text="🆕 新商品建檔", padding=15)
         paned.add(frame_left, weight=1)
 
         ttk.Label(frame_left, text="1. 分類 Tag:").pack(anchor="w")
@@ -1438,9 +1438,16 @@ class SalesApp:
 
         ttk.Button(frame_left, text="✅ 完成建檔", command=self.submit_new_product).pack(fill="x", pady=20)
 
+        ttk.Separator(frame_left, orient="horizontal").pack(fill="x", pady=10)
+        ttk.Label(frame_left, text="匯入整筆excel資料").pack(anchor="w") # 增加一個空白行作間隔
+        btn_wizard = ttk.Button(frame_left, text="📥 啟動商品批次匯入精靈", command=self.open_import_wizard)
+        btn_wizard.pack(fill="x", pady=(10, 0))
+
+
         # --- 3. 右側：資料查詢與維護 ---
         frame_right = ttk.LabelFrame(paned, text="🔍 商品資料維護", padding=15)
         paned.add(frame_right, weight=1)
+
 
         # 【修正】搜尋框綁定 KeyRelease 事件，達成及時搜尋
         ent_search = ttk.Entry(frame_right, textvariable=self.var_mgmt_search)
@@ -1488,6 +1495,31 @@ class SalesApp:
 
         # 初始載入清單
         self.update_mgmt_prod_list()
+
+    def open_import_wizard(self):
+        """ 開啟外部匯入精靈視窗 """
+        from import_wizard import ImportWizard # 這裡才匯入，節省主程式負擔
+        ImportWizard(self.root, self.callback_from_wizard)
+
+    def callback_from_wizard(self, new_data_list):
+        """ 當精靈按下『確認匯入』時，執行此段將資料寫入 Excel """
+        try:
+            df_new = pd.DataFrame(new_data_list)
+            # 合併舊資料
+            df_combined = pd.concat([self.products_df, df_new], ignore_index=True)
+            # 以商品名稱為準，保留最後加入的資料（即匯入的那筆）
+            df_combined.drop_duplicates(subset=['商品名稱'], keep='last', inplace=True)
+            
+            # 使用您的萬用存檔引擎
+            if self._universal_save({SHEET_PRODUCTS: df_combined}):
+                self.products_df = df_combined
+                self.update_mgmt_prod_list() # 刷新列表
+                return True
+        except Exception as e:
+            messagebox.showerror("匯入存檔失敗", str(e))
+            return False
+
+
 
     def setup_tracking_tab(self):
         """ 建立訂單追蹤區 (緩衝區) """
@@ -2442,27 +2474,28 @@ class SalesApp:
             self.var_pur_sel_cost.set(current_cost)
 
     def add_to_pur_cart(self):
-        """ 加入商品到進貨購物車 (包含稅金計算) """
+        """ 加入商品到進貨購物車 (修正為總額直乘稅率邏輯) """
         name = self.var_pur_sel_name.get()
         qty = self.var_pur_sel_qty.get()
-        cost = self.var_pur_sel_cost.get()
+        cost = self.var_pur_sel_cost.get() 
         
         if not name or qty <= 0: return
 
-        # 計算稅金 (5%)
-        tax = round(qty * cost * 0.05, 2) if self.var_pur_tax_enabled.get() else 0.0
-        total = (qty * cost) + tax
+        # 含稅總額
+        total_inclusive = qty * cost
+        
+        # --- [核心修正] ---
+        if self.var_pur_tax_enabled.get():
+            # 直接計算總額的 5% 作為進項稅額
+            tax = round(total_inclusive * 0.05, 2)
+        else:
+            tax = 0.0
 
         self.pur_cart_data.append({
-            "name": name, "qty": qty, "cost": cost, "tax": tax, "total": total
+            "name": name, "qty": qty, "cost": cost, "tax": tax, "total": total_inclusive
         })
-        self.tree_pur_cart.insert("", "end", values=(name, qty, cost, tax, total))
         
-        # 更新總額
-        total_sum = sum(item['total'] for item in self.pur_cart_data)
-        self.lbl_pur_total.config(text=f"本次進貨總額: ${total_sum:,.0f}")
-        
-        # 清空單筆輸入區
+        self.tree_pur_cart.insert("", "end", values=(name, qty, cost, tax, total_inclusive))
         self.var_pur_sel_name.set(""); self.var_pur_sel_qty.set(1); self.var_pur_sel_cost.set(0.0)
 
     def remove_from_pur_cart(self):
@@ -2975,23 +3008,25 @@ class SalesApp:
         elif "自訂" in selected_text: self.combo_fee_rate.set("") 
         self.update_totals()
 
+
     def update_totals_event(self, event): self.update_totals()
     
+    
     def update_totals(self):
+        """ 修正銷售總計：總額直乘稅率邏輯 (100元扣5元) """
         try:
+            # 1. 總銷售額與總成本
             t_sales = sum(i['total_sales'] for i in self.cart_data)
             t_cost = sum(i['total_cost'] for i in self.cart_data)
             
-            # --- [優化：解析複合費率] ---
+            # 2. 解析平台手續費 (百分比 + 固定金額)
             selection = self.var_fee_rate_str.get()
             rate = 0.0
             fixed_fee = 0.0
             
             if "(" in selection:
-                # 取得括號前的名稱 (例如 "蝦皮活動")
                 fee_name = selection.split(" (")[0]
                 try:
-                    # 去 Excel 設定表找這筆名稱的數值
                     df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
                     match = df_cfg[df_cfg['設定名稱'] == fee_name]
                     if not match.empty:
@@ -2999,32 +3034,42 @@ class SalesApp:
                         fixed_fee = float(match.iloc[0].get('固定金額', 0))
                 except: pass
             else:
-                # 使用者手動輸入數字的情況
                 try: rate = float(selection)
                 except: rate = 0.0
 
-            # 取得「扣費項目」手動填寫的金額 (例如額外廣告費)
             try: extra = float(self.var_extra_fee.get())
             except: extra = 0.0
             
-            # --- [核心計算公式修正] ---
-            # 總手續費 = (銷售額 * 百分比) + 固定單筆費用 + 其他扣費
+            # 平台扣費 = (總額 * 費率) + 固定費 + 額外費
             platform_fee = (t_sales * (rate/100)) + fixed_fee + extra
-            
-            # 稅務計算 (維持原本邏輯)
+
+            # --- [核心修正：總額課稅邏輯] ---
             tax_amount = 0
             tax_type = self.var_tax_type.get()
-            if "5%" in tax_type: tax_amount = t_sales - (t_sales / 1.05)
-            elif "1%" in tax_type: tax_amount = t_sales - (t_sales / 1.01)
-
-            income = t_sales - platform_fee # 平台實際撥款
-            profit = t_sales - platform_fee - tax_amount - t_cost # 真正賺的錢
             
-            # 更新顯示
+            if "5%" in tax_type:
+                # 總額 5% 直接扣除 (例如 100元 扣 5元)
+                tax_amount = t_sales * 0.05
+            elif "1%" in tax_type:
+                # 總額 1% 直接扣除
+                tax_amount = t_sales * 0.01
+            # ------------------------------
+
+            # 3. 計算預估入帳 (平台撥款 = 總額 - 平台扣費)
+            income = t_sales - platform_fee
+
+            # 4. 計算實收淨利 (總額 - 平台費 - 稅金 - 成本)
+            profit = t_sales - platform_fee - tax_amount - t_cost
+            
+            # 更新介面標籤
             self.lbl_gross.config(text=f"總金額: ${t_sales:,.0f}")
             self.lbl_fee.config(text=f"平台扣費: -${platform_fee:,.1f} (含固定費: ${fixed_fee})")
-            self.lbl_income.config(text=f"預估入帳: ${income:,.1f}")
-            self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
+            self.lbl_income.config(text=f"預估入帳(平台撥款): ${income:,.1f}")
+
+            if tax_amount > 0:
+                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f} ({tax_type}稅額: -${tax_amount:,.1f})")
+            else:
+                self.lbl_profit.config(text=f"實收淨利: ${profit:,.1f}")
 
             return t_sales, platform_fee, tax_amount
         except: 
