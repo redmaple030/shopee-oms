@@ -1,4 +1,4 @@
-#shopee-oms 4.1 完整版
+#shopee-oms 4.2 完整版
 
 import json
 import sys
@@ -432,9 +432,11 @@ class SalesApp:
         ttk.Separator(left_frame).pack(fill="x", pady=10)
         
         ttk.Label(left_frame, text="選擇商品:").pack(anchor="w")
-        self.combo_pur_prod = ttk.Combobox(left_frame, textvariable=self.var_pur_sel_name, state="readonly")
+        self.combo_pur_prod = ttk.Combobox(left_frame, textvariable=self.var_pur_sel_name, state="normal")
         self.combo_pur_prod.pack(fill="x", pady=2)
         self.combo_pur_prod.bind("<<ComboboxSelected>>", self.on_pur_prod_select)
+        self.combo_pur_prod.bind('<KeyRelease>', self.filter_pur_prod_list)
+
 
         ttk.Label(left_frame, text="進貨單價 (不含稅):").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_sel_cost).pack(fill="x", pady=2)
@@ -449,8 +451,8 @@ class SalesApp:
         right_frame = ttk.LabelFrame(paned, text="2. 本次採購明細 (待送出)", padding=10)
         paned.add(right_frame, weight=2)
         
-        self.tree_pur_cart = ttk.Treeview(right_frame, columns=("品名", "量", "價", "稅", "總"), show='headings', height=10)
-        for c in ("品名", "量", "價", "稅", "總"):
+        self.tree_pur_cart = ttk.Treeview(right_frame, columns=("品名", "數量", "價格", "稅額", "總價"), show='headings', height=10)
+        for c in ("品名", "數量", "價格", "稅額", "總價"):
             self.tree_pur_cart.heading(c, text=c)
             self.tree_pur_cart.column(c, width=80, anchor="center")
         self.tree_pur_cart.pack(fill="both", expand=True)
@@ -461,6 +463,35 @@ class SalesApp:
         ttk.Button(btn_area, text="🚀 送出採購單", command=self.submit_purchase_batch).pack(side="right", padx=5)
 
         self.update_pur_prod_list()
+
+
+    def filter_pur_prod_list(self, event):
+        """ 進貨管理：下拉選單關鍵字即時過濾 """
+        # 取得目前使用者輸入的文字
+        typed = self.var_pur_sel_name.get()
+
+        if not hasattr(self, 'products_df') or self.products_df.empty:
+            return
+
+        # 取得所有商品名稱清單
+        all_names = self.products_df['商品名稱'].astype(str).tolist()
+
+        if typed == '':
+            # 如果沒輸入，顯示全部
+            data = all_names
+        else:
+            # 模糊搜尋：不分大小寫，只要包含關鍵字就顯示
+            data = [name for name in all_names if typed.lower() in name.lower()]
+
+        # 更新下拉選單的內容
+        self.combo_pur_prod['values'] = data
+        
+        # 強制展開下拉選單 (讓使用者看到過濾結果)
+        # 注意：在某些系統上這可能會干擾打字，如果覺得太干擾可以註釋掉這行
+        try:
+            self.combo_pur_prod.event_generate('<Down>')
+        except:
+            pass
 
 
 
@@ -1042,14 +1073,14 @@ class SalesApp:
         # 讀取全域變數的 SALT
         # raw_string = user_id + SECRET_SALT  <-- 記得這裡要用全域變數，不要重複定義
         try:
-            # 確保有讀到 SECRET_SALT，如果沒有定義，就用預設值 (避免報錯)
-            salt = globals().get('SECRET_SALT', "DEMO_SALT_FOR_OPENSOURCE")
+            salt = globals().get('SECRET_SALT', "redmaple") # 確保 Salt 一致
             raw_string = user_id + salt
+            # --- 這裡改成 sha256 ---
+            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
         except:
-             raw_string = user_id + "DEMO_SALT_FOR_OPENSOURCE"
+            raw_string = user_id + "redmaple"
+            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
 
-        expected_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
-        
         if input_code == expected_code:
             self.is_vip = True
             
@@ -1122,7 +1153,7 @@ class SalesApp:
             except:
                 raw_string = saved_user + "DEMO_SALT_FOR_OPENSOURCE"
                 
-            expected_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
+            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
             
             if saved_key == expected_code:
                 # 通過驗證！自動解鎖
@@ -2468,10 +2499,15 @@ class SalesApp:
     def on_pur_prod_select(self, event):
         """ 當進貨選中商品時，自動帶入目前的成本作為參考 """
         selected_name = self.var_pur_sel_name.get()
+        
+        # 根據選中的名稱去找原始資料
         record = self.products_df[self.products_df['商品名稱'] == selected_name]
         if not record.empty:
             current_cost = record.iloc[0]['預設成本']
             self.var_pur_sel_cost.set(current_cost)
+            
+            # 可選：選中後自動刷新 values 回全部清單，方便下次搜尋
+            self.combo_pur_prod['values'] = self.products_df['商品名稱'].tolist()
 
     def add_to_pur_cart(self):
         """ 加入商品到進貨購物車 (修正為總額直乘稅率邏輯) """
