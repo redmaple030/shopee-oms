@@ -244,6 +244,12 @@ class SalesApp:
         self.drive_manager = GoogleDriveSync()
 
         # --- 變數初始化 ---
+        self.var_after_type = tk.StringVar()  # 售後類型 (補寄/補貼/換貨/保固)
+        self.var_after_cost = tk.DoubleVar(value=0.0) # 額外支出金額
+        self.var_after_remark = tk.StringVar() # 售後備註
+        self.var_view_after_status = tk.StringVar(value="無售後紀錄")
+
+
         self.var_date = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
         self.var_search = tk.StringVar()
         
@@ -285,6 +291,9 @@ class SalesApp:
         self.create_tabs()
          # 啟動時自動檢查授權
         self.check_license_on_startup()
+
+
+        self.var_sel_sku = tk.StringVar() # 用於暫存銷售頁面選中商品的編號
 
       
     
@@ -1432,9 +1441,11 @@ class SalesApp:
         right_frame = ttk.LabelFrame(paned, text="訂單內容", padding=10)
         paned.add(right_frame, weight=2)
 
-        cols = ("商品名稱", "數量", "單價", "總計")
+        cols = ("編號", "商品名稱", "數量", "單價", "總計")
         self.tree = ttk.Treeview(right_frame, columns=cols, show='headings', height=8)
-        self.tree.heading("商品名稱", text="商品名稱")
+        self.tree.heading("編號", text="編號/位置",anchor="w")
+        self.tree.column("編號", width=80) 
+        self.tree.heading("商品名稱", text="商品名稱",anchor="w")
         self.tree.column("商品名稱", width=120)
         self.tree.heading("單價", text="售價")
         self.tree.column("單價", width=80, anchor="e")
@@ -1763,36 +1774,38 @@ class SalesApp:
 
 
     def load_tracking_data(self):
-        """ 讀取『訂單追蹤』分頁：解決搜尋時資訊消失的問題 """
-        # 1. 清空列表
+        """ 讀取『訂單追蹤』分頁：使用分組填充，防止買家名稱錯誤繼承 """
         for i in self.tree_track.get_children():
             self.tree_track.delete(i)
             
         try:
             if not os.path.exists(FILE_NAME): return
             
-            # 2. 讀取 Excel 原始資料
+            # 1. 讀取 Excel 原始資料
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
             if df.empty: return
 
-            # 3. 格式化訂單編號 (防止科學記號與 .0)
-            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            # 2. 統一格式化訂單編號 (這是我們的分組依據)
+            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
 
-            # --- [核心修正 A：在記憶體中補齊留白資訊] ---
-            # 我們建立一個副本來處理，不影響 Excel 原始檔案的格式
+            # 3. --- [核心修正：分組向下填充] ---
+            # 建立副本進行顯示處理
             df_display = df.copy()
             
-            # 這些欄位如果留白，就抓取上一列的值 (ffill = forward fill)
-            # 這樣就算搜尋到訂單的第 2, 3 項商品，也能看到買家資訊
+            # 定義需要補齊資訊的欄位
             fill_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點']
-            for col in fill_cols:
-                if col in df_display.columns:
-                    df_display[col] = df_display[col].ffill()
+            
+            # 【關鍵點】：按『訂單編號』分組後再執行 ffill
+            # 這樣「訂單 A」的買家名稱絕對不會流到「訂單 B」
+            df_display[fill_cols] = df_display.groupby('訂單編號')[fill_cols].ffill()
+            
+            # 如果分組填充完後還是 NaN (代表該訂單編號的第一行本來就沒寫買家)，則填入預設值
+            df_display[fill_cols] = df_display[fill_cols].fillna("資訊缺失")
 
             # 4. 取得搜尋關鍵字
             query = self.var_track_search.get().strip().lower()
 
-            # 5. 執行過濾 (在補齊資料後的 df_display 上進行搜尋)
+            # 5. 執行過濾 (在補齊資料後的副本上搜尋)
             if query:
                 mask = (
                     df_display['買家名稱'].astype(str).str.lower().str.contains(query) |
@@ -1803,9 +1816,9 @@ class SalesApp:
             else:
                 df_filtered = df_display
 
-            # 6. 填入 Treeview 介面
+            # 6. 填入 Treeview
             for idx, row in df_filtered.iterrows():
-                # idx 是原始 DataFrame 的列索引，這對後續的修改/刪除操作很重要
+                # 使用 text=str(idx) 確保我們修改時能對應回 Excel 的原始列號
                 self.tree_track.insert("", "end", text=str(idx), values=(
                     row.get('訂單編號', ''),
                     row.get('日期', ''),
@@ -1817,10 +1830,7 @@ class SalesApp:
                 ))
                 
         except Exception as e:
-            print(f"搜尋追蹤清單失敗: {e}")
-                
-        except Exception as e:
-            print(f"搜尋追蹤清單失敗: {e}")
+            print(f"載入追蹤清單失敗: {e}")
 
     def action_track_modify(self):
         """ 修改資料: 跳出視窗修改數量與價格 """
@@ -2032,12 +2042,13 @@ class SalesApp:
     
     #================= 銷售紀錄 =================
     def setup_sales_edit_tab(self):
-        paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
-        paned.pack(fill="both", expand=True, padx=10, pady=10)
+        main_paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
+        main_paned.pack(fill="both", expand=True, padx=10, pady=10)
+
 
         # 1. 上方：列表區
-        list_frame = ttk.LabelFrame(paned, text="銷售歷史紀錄 (點擊項目進行修改)", padding=5)
-        paned.add(list_frame, weight=3)
+        list_frame = ttk.LabelFrame(main_paned, text="銷售歷史紀錄 (點擊項目進行檢視與售後處理)", padding=5)
+        main_paned.add(list_frame, weight=3)
 
         # 建立 Treeview
         cols = ("日期", "買家名稱", "商品", "數量", "售價", "手續費", "淨利", "毛利")
@@ -2065,9 +2076,13 @@ class SalesApp:
         btn_refresh = ttk.Button(list_frame, text="🔄 重新讀取 Excel", command=self.load_sales_records_for_edit)
         btn_refresh.pack(fill="x", side="bottom")
 
+        bottom_container = ttk.PanedWindow(main_paned, orient=tk.HORIZONTAL)
+        main_paned.add(bottom_container, weight=2)
+
+
         # 2. 下方：改為「訂單詳情檢視 (唯讀)」
-        detail_frame = ttk.LabelFrame(paned, text="🔍 訂單完整詳情 (唯讀)", padding=15)
-        paned.add(detail_frame, weight=1)
+        detail_frame = ttk.LabelFrame(bottom_container, text="🔍 訂單完整詳情 (唯讀)", padding=15)
+        bottom_container.add(detail_frame, weight=1)
 
         # 建立一組變數用來顯示
         self.var_view_oid = tk.StringVar()
@@ -2099,10 +2114,133 @@ class SalesApp:
         ttk.Label(detail_frame, text="該品稅額:").grid(row=3, column=0, **opts)
         ttk.Label(detail_frame, textvariable=self.var_view_tax, foreground="red").grid(row=3, column=1, **opts)
 
-        # 初始載入
-        self.load_sales_records_for_edit()
-        self.calculate_analysis_data()
 
+        # --- 售後服務登記區 (UI) ---
+        
+        after_frame = ttk.LabelFrame(bottom_container, text="🛠️ 售後服務處理", padding=15)
+        bottom_container.add(after_frame, weight=1)
+
+        # --- 即時狀態顯示區 ---
+        status_frame = ttk.Frame(after_frame, relief="flat")
+        status_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Label(status_frame, text="🚩 目前售後狀態：", font=("", 10, "bold")).pack(side="left")
+        ttk.Label(status_frame, textvariable=self.var_view_after_status, foreground="#d9534f", wraplength=250).pack(side="left")
+
+        ttk.Separator(after_frame, orient="horizontal").grid(row=1, column=0, columnspan=2, sticky="ew", pady=10)
+
+        # --- 輸入區 ---
+        a_opts = {'padx': 5, 'pady': 3, 'sticky': 'w'}
+        ttk.Label(after_frame, text="處理類型:").grid(row=2, column=0, **a_opts)
+        self.combo_after_type = ttk.Combobox(after_frame, textvariable=self.var_after_type, 
+                                            values=["補寄商品", "補貼款/退部分金額", "換貨支出", "保固寄新", "其他支出"], state="readonly")
+        self.combo_after_type.grid(row=2, column=1, **a_opts)
+
+        ttk.Label(after_frame, text="額外支出($):").grid(row=3, column=0, **a_opts)
+        ttk.Entry(after_frame, textvariable=self.var_after_cost, width=15).grid(row=3, column=1, **a_opts)
+
+        ttk.Label(after_frame, text="售後說明:").grid(row=4, column=0, **a_opts)
+        ttk.Entry(after_frame, textvariable=self.var_after_remark, width=25).grid(row=4, column=1, **a_opts)
+
+        btn_after = ttk.Button(after_frame, text="🚀 提交售後紀錄", command=self.submit_after_sales)
+        btn_after.grid(row=5, column=0, columnspan=2, pady=10)
+
+        self.load_sales_records_for_edit()
+
+        
+    
+        
+    def submit_after_sales(self):
+        sel = self.tree_sales_edit.selection()
+        if not sel:
+            messagebox.showwarning("提示", "請先從上方列表選擇要處理的歷史訂單項目")
+            return
+        
+        # 取得選中項目在 Treeview 儲存的原始列索引 (idx)
+        item = self.tree_sales_edit.item(sel[0])
+        idx = int(item['text'])
+        
+        after_type = self.var_after_type.get()
+        extra_cost = self.var_after_cost.get()
+        after_remark = self.var_after_remark.get().strip()
+        
+        if not after_type:
+            messagebox.showwarning("提示", "請選擇處理類型")
+            return
+
+        if not messagebox.askyesno("確認登記", f"確認登記售後服務？\n類型：{after_type}\n金額：${extra_cost}\n這將會直接扣除該訂單的淨利紀錄並更新庫存。"):
+            return
+
+        try:
+            # 1. 讀取相關資料 (一次讀取多個分頁)
+            with pd.ExcelFile(FILE_NAME) as xls:
+                df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
+                df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
+            
+            # 2. 更新銷售紀錄資料 (針對指定行 idx)
+            # 扣除淨利
+            old_profit = df_sales.at[idx, '總淨利']
+            df_sales.at[idx, '總淨利'] = round(old_profit - extra_cost, 2)
+            
+            # 更新備註 (追加售後資訊)
+            current_tags = str(df_sales.at[idx, '扣費項目']) if pd.notna(df_sales.at[idx, '扣費項目']) else ""
+            if current_tags == "nan": current_tags = ""
+            
+            # 建立新的備註標記
+            new_tag = f"[{after_type}:-${extra_cost}] {after_remark}"
+            full_remark = f"{current_tags} {new_tag}".strip()
+            df_sales.at[idx, '扣費項目'] = full_remark
+            
+            # 重新計算該行的毛利率 (因為淨利減少了)
+            total_sales = df_sales.at[idx, '總銷售額']
+            if total_sales > 0:
+                new_margin = (df_sales.at[idx, '總淨利'] / total_sales) * 100
+                df_sales.at[idx, '毛利率'] = round(new_margin, 1)
+
+            # 3. 處理庫存扣除 (若屬於補寄類)
+            # 只有在特定的處理類型下才自動扣庫存
+            if after_type in ["補寄商品", "保固寄新"]:
+                prod_name = df_sales.at[idx, '商品名稱']
+                p_idx_list = df_prods[df_prods['商品名稱'] == prod_name].index
+                if not p_idx_list.empty:
+                    p_idx = p_idx_list[0]
+                    old_stock = df_prods.at[p_idx, '目前庫存']
+                    df_prods.at[p_idx, '目前庫存'] = old_stock - 1 # 預設補寄 1 個
+                    print(f"售後扣庫存：{prod_name} 由 {old_stock} -> {old_stock-1}")
+
+            # 4. 調用萬用引擎一次性儲存 (確保資料一致性)
+            save_dict = {
+                SHEET_SALES: df_sales,
+                SHEET_PRODUCTS: df_prods
+            }
+            
+            if self._universal_save(save_dict):
+                messagebox.showinfo("成功", "售後處理已完成！\n1. 淨利已重新計算\n2. 備註已更新\n3. 庫存已同步(若適用)")
+                
+                # --- [關鍵：即時更新介面顯示] ---
+                # A. 更新記憶體內的商品資料
+                self.products_df = df_prods 
+                
+                # B. 刷新銷售紀錄列表 (讓清單上的淨利、毛利數字變動)
+                self.load_sales_records_for_edit()
+                
+                # C. 重設售後輸入框內容
+                self.var_after_cost.set(0.0)
+                self.var_after_remark.set("")
+                
+                # D. 重要：更新右側的「目前售後狀態」即時顯示標籤
+                # 這裡直接把剛才算好的 full_remark 填進去，使用者就不需要重新點選一次
+                self.var_view_after_status.set(full_remark)
+                
+                # E. 重新計算營收分析 (因為淨利變了)
+                self.calculate_analysis_data()
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("錯誤", f"售後登記作業失敗: {str(e)}")
+
+
+    
     def load_sales_records_for_edit(self):
         """ 讀取銷售紀錄到列表 (確保顯示也是最新日期在最前) """
         for i in self.tree_sales_edit.get_children():
@@ -2147,11 +2285,11 @@ class SalesApp:
         except Exception as e:
             print(f"讀取歷史列表失敗: {e}")
 
+
     def on_sales_edit_select(self, event):
         sel = self.tree_sales_edit.selection()
         if not sel: return
         
-        # 取得 Treeview 選中的資料
         item = self.tree_sales_edit.item(sel[0])
         idx = int(item['text']) 
 
@@ -2159,17 +2297,24 @@ class SalesApp:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
             row = df.iloc[idx]
             
-            # 將資料填入唯讀變數
+            # 更新訂單詳情
             self.var_view_oid.set(str(row.get('訂單編號', '')).replace("'", ""))
-            self.var_view_date.set(str(row.get('日期', '')))
             self.var_view_buyer.set(str(row.get('買家名稱', '')))
             self.var_view_ship.set(str(row.get('寄送方式', '')))
-            self.var_view_loc.set(str(row.get('取貨地點', '')))
             self.var_view_item.set(str(row.get('商品名稱', '')))
             self.var_view_tax.set(f"${row.get('稅額', 0)}")
             
+            # --- [即時顯示售後狀態] ---
+            # 抓取「扣費項目」欄位
+            current_after_note = str(row.get('扣費項目', '')).strip()
+            if current_after_note == "" or current_after_note == "nan":
+                self.var_view_after_status.set("目前無售後紀錄")
+            else:
+                self.var_view_after_status.set(current_after_note)
+            
         except Exception as e:
             print(f"讀取詳情失敗: {e}")
+
 
     def save_sales_edit(self):
         """儲存修改並自動重算 (含 Excel 欄位自動修復)"""
@@ -3176,22 +3321,23 @@ class SalesApp:
         
         if not self.products_df.empty:
             for index, row in self.products_df.iterrows():
-                # 讀取欄位
                 p_name = str(row['商品名稱'])
-                sku = str(row.get('商品編號', ''))
+                
+                # --- 容錯處理：處理空編號 ---
+                raw_sku = row.get('商品編號', '')
+                # 如果是 pandas 的 NaN 或 None，轉為空字串
+                sku = str(raw_sku) if pd.notna(raw_sku) else ""
+                sku = sku if sku.lower() != "nan" else ""
+                
                 p_tag = str(row['分類Tag']) if pd.notna(row['分類Tag']) else "無"
                 
-                # 處理編號顯示
-                sku_display = f"[{sku}] " if sku and sku != "nan" and sku.strip() != "" else ""
-                
-                # 處理庫存數字
                 try: p_stock = int(row['目前庫存'])
                 except: p_stock = 0
                 
-                # 組合最終顯示字串
-                display_str = f"{sku_display}[{p_tag}] {p_name} (庫存: {p_stock})"
+                # 顯示字串：不含編號
+                display_str = f"[{p_tag}] {p_name} (庫存: {p_stock})"
                 
-                # 搜尋邏輯：檢查 名稱、分類、或 編號 是否符合
+                # 搜尋邏輯：如果沒編號，sku.lower() 就會是空字串，不會匹配到關鍵字，這很安全
                 if (search_term in p_name.lower() or 
                     search_term in p_tag.lower() or 
                     search_term in sku.lower()):
@@ -3201,66 +3347,73 @@ class SalesApp:
         selection = self.listbox_sales.curselection()
         if selection:
             display_str = self.listbox_sales.get(selection[0])
+            # 解析名稱：拿最後一個 "]" 之後的文字，並切掉後面的 "(庫存:..."
             try:
-                # 1. 先切掉後面的 (庫存: ...)
                 temp = display_str.rsplit(" (庫存:", 1)[0]
-                # 2. 如果有包含 [編號] 或 [分類]，拿最後一個 ] 之後的內容
-                if "]" in temp:
-                    selected_name = temp.split("]")[-1].strip()
-                else:
-                    selected_name = temp
+                selected_name = temp.split("]")[-1].strip() if "]" in temp else temp
             except:
                 selected_name = display_str 
 
             self.var_sel_name.set(selected_name)
             self.var_sel_qty.set(1)
             
+            # 從資料庫抓取該商品的詳細資料
             record = self.products_df[self.products_df['商品名稱'] == selected_name]
             if not record.empty:
+                # --- 讀取編號並處理空值 ---
+                raw_sku = record.iloc[0].get('商品編號', '')
+                sku = str(raw_sku) if pd.notna(raw_sku) else ""
+                if sku.lower() == "nan": sku = "" # 移除 pandas 的 nan 噪音
+                
+                # 這裡就是剛才報錯的地方，現在 self.var_sel_sku 已經在 __init__ 定義好了
+                self.var_sel_sku.set(sku) 
+                
                 self.var_sel_cost.set(record.iloc[0]['預設成本'])
-                try: stock = int(record.iloc[0]['目前庫存'])
-                except: stock = 0
+                try: 
+                    stock = int(record.iloc[0]['目前庫存'])
+                except: 
+                    stock = 0
                 self.var_sel_stock_info.set(str(stock)) 
-                self.var_sel_price.set(0)
+                self.var_sel_price.set(0) # 清空上次售價
+    
 
     def add_to_cart(self):
         name = self.var_sel_name.get()
+        sku = self.var_sel_sku.get() # 這裡讀取剛才存進去的編號
         if not name: return
+        
+        # 容錯：如果沒編號顯示 --
+        display_sku = sku if sku.strip() != "" else "--"
+
         try:
             qty = self.var_sel_qty.get()
             cost = self.var_sel_cost.get()
             price = self.var_sel_price.get()
-            
             if qty <= 0: return
-
-            current_stock = 0
-            record = self.products_df[self.products_df['商品名稱'] == name]
-            if not record.empty:
-                try: current_stock = int(record.iloc[0]['目前庫存'])
-                except: current_stock = 0
-
-            if qty > current_stock:
-                confirm = messagebox.askyesno("庫存不足警告", f"商品「{name}」目前庫存僅剩 {current_stock}，但您想賣出 {qty}。\n\n是否仍要加入清單 (超賣/預購)？")
-                if not confirm:
-                    return
 
             total_sales = price * qty
             total_cost = cost * qty
+            
             self.cart_data.append({
+                "sku": sku, # 存入記憶體
                 "name": name, "qty": qty, "unit_cost": cost, "unit_price": price,
                 "total_sales": total_sales, "total_cost": total_cost
             })
-            self.tree.insert("", "end", values=(name, qty, price, total_sales))
+            
+            # 寫入 Treeview (確保第一欄是編號/位置)
+            self.tree.insert("", "end", values=(display_sku, name, qty, price, total_sales))
+            
             self.update_totals()
             
+            # 清空選取狀態
             self.var_sel_name.set("")
-            self.var_search.set("")
+            self.var_sel_sku.set("") # 記得也要清空編號
             self.var_sel_price.set(0)
             self.var_sel_qty.set(1)
             self.var_sel_stock_info.set("--")
-            self.update_sales_prod_list()
             
-        except ValueError: messagebox.showerror("錯誤", "數字格式錯誤")
+        except ValueError: 
+            messagebox.showerror("錯誤", "數字格式錯誤")
 
     def remove_from_cart(self):
         sel = self.tree.selection()
@@ -3354,12 +3507,19 @@ class SalesApp:
             return text.replace("\n", "").replace("\r", "").strip()
 
         if self.var_enable_cust.get():
-            cust_name = clean_text(self.var_cust_name.get())
-            cust_loc = clean_text(self.var_cust_loc.get())
+            cust_name = self.var_cust_name.get().strip()
+            if not cust_name or cust_name == "":
+                messagebox.showerror("欄位缺失", "您已勾選『填寫來源與顧客』，請務必輸入『買家名稱』！")
+                # 將焦點移回輸入框，方便使用者補填
+                self.entry_cust_name.focus()
+                return
+            
+            # 其餘資訊抓取
+            cust_loc = self.var_cust_loc.get().strip()
             ship_method = self.var_ship_method.get()
             platform_name = self.var_platform.get()
         else:
-            cust_name = "" ; cust_loc = "" ; ship_method = "" ; platform_name = ""
+            cust_name = "未提供" ; cust_loc = "未提供" ; ship_method = "未提供" ; platform_name = "零售/現場"
             
         date_str = self.var_date.get().strip()
         now = datetime.now()
@@ -3395,6 +3555,7 @@ class SalesApp:
 
                 rows.append({
                     "訂單編號": order_id,
+                    "商品編號": item.get('sku', ''), # 這裡把 sku 存進 Excel
                     "日期": row_date, "買家名稱": row_buyer, "交易平台": row_platform,  
                     "寄送方式": row_ship, "取貨地點": row_loc,
                     "商品名稱": item['name'], "數量": item['qty'], 
@@ -3622,6 +3783,7 @@ class SalesApp:
             self.products_df = df_new
             self.update_sales_prod_list()
             self.update_mgmt_prod_list()
+            
             self.var_upd_name.set("")
             self.var_upd_tag.set("")
             self.var_upd_cost.set(0)
@@ -3640,3 +3802,4 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
+
