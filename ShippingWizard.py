@@ -1,3 +1,5 @@
+#出貨單生成插件
+
 import os
 import webbrowser
 from datetime import datetime, timedelta
@@ -172,4 +174,5 @@ def generate_shipping_html(info, items, size_choice):
         f.write(html_content)
     
     # 開啟該路徑
+
     webbrowser.open(os.path.abspath(file_full_path))
