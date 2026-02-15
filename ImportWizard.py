@@ -1,3 +1,5 @@
+#excel快速匯入插件
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
@@ -174,4 +176,5 @@ class ImportWizard(tk.Toplevel):
         if messagebox.askyesno("匯入確認", msg):
             if self.save_callback(new_list):
                 messagebox.showinfo("成功", "資料匯入完成！")
+
                 self.destroy()
