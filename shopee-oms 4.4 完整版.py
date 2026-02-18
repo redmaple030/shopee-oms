@@ -176,7 +176,7 @@ class GoogleDriveSync:
                     except Exception as delete_error:
                         print(f"刪除舊檔失敗: {delete_error}")
 
-            return True, f"備份成功！\n雲端檔名: {file_name}\n(系統已自動保留最新 30 筆紀錄)"
+            return True, f"備份成功！\n雲端檔名: {file_name}\n(系統已自動保留最新 15 筆紀錄)"
         except Exception as e:
             return False, f"上傳失敗: {str(e)}"
 
@@ -236,7 +236,8 @@ class SalesApp:
             "分類Tag": tk.BooleanVar(value=True),
             "安全庫存": tk.BooleanVar(value=True),
             "商品連結": tk.BooleanVar(value=True),
-            "商品備註": tk.BooleanVar(value=True)
+            "商品備註": tk.BooleanVar(value=True),
+            "單位權重": tk.BooleanVar(value=True)
         }
 
         # --- 字型設定 ---
@@ -247,6 +248,8 @@ class SalesApp:
         self.drive_manager = GoogleDriveSync()
 
         # --- 變數初始化 ---
+        self.var_add_weight = tk.DoubleVar(value=1.0) # 新增商品權重用
+        self.var_upd_weight = tk.DoubleVar(value=1.0) # 修改商品權重用
         self.fee_lookup = {}
         self.var_ship_payer = tk.StringVar(value="買家付") # 預設買家付
         self.var_tax_type = tk.StringVar(value="無")
@@ -411,7 +414,7 @@ class SalesApp:
 
             cols_prods = ["商品編號","分類Tag", "商品名稱", "預設成本", "目前庫存", 
                             "最後更新時間", "初始上架時間", "最後進貨時間", "安全庫存",
-                            "商品連結", "商品備註"]
+                            "商品連結", "商品備註","單位權重"]
 
             cols_config = ["設定名稱", "費率百分比", "固定金額"]
 
@@ -444,6 +447,22 @@ class SalesApp:
                             pd.DataFrame(columns=cols_purchase).to_excel(writer, sheet_name=SHEET_PURCHASES, index=False)
                             pd.DataFrame(columns=cols_purchase).to_excel(writer, sheet_name=SHEET_PUR_TRACKING, index=False)
                 except: pass
+
+                try:
+                    # 檢查商品資料分頁
+                    df_temp = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
+                    missing_cols = [c for c in cols_prods if c not in df_temp.columns]
+                    if missing_cols:
+                        for c in missing_cols:
+                            df_temp[c] = 1.0 if c == "單位權重" else "" # 單位權重預設給 1
+                        # 補完後存回去 (這裡可以用妳原本寫好的存檔引擎或簡單存)
+                        with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                            df_temp.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
+                        print(f"系統自動補齊商品欄位: {missing_cols}")
+                except: pass
+
+
+                
 
     def load_products(self):
         try:
@@ -611,6 +630,7 @@ class SalesApp:
             for name in self.products_df['商品名稱'].tolist():
                 self.list_pur_prod.insert(tk.END, name)
 
+
     def update_pur_prod_list_by_search(self, event=None):
         """ 進貨搜尋框：顯示 [編號] 商品名稱，並支援編號搜尋 """
         query = self.ent_pur_search.get().lower()
@@ -627,6 +647,7 @@ class SalesApp:
                 # 搜尋邏輯：檢查 關鍵字 是否出現在 名稱 或 編號 中
                 if query in p_name.lower() or query in sku.lower():
                     self.list_pur_prod.insert(tk.END, f"{sku_display}{p_name}")
+
 
     def on_pur_list_select(self, event):
         selection = self.list_pur_prod.curselection()
@@ -650,7 +671,6 @@ class SalesApp:
 
 
     def submit_purchase_batch(self):
-        """ 提交採購：確保欄位名稱與 Excel 標題完全一致 """
         if not self.pur_cart_data: return
         supplier = self.var_pur_supplier.get().strip()
         pur_id = "I" + datetime.now().strftime("%Y%m%d%H%M%S")
@@ -662,18 +682,19 @@ class SalesApp:
             
             new_entries = []
             for item in self.pur_cart_data:
-                # 注意：這裡的 Key 必須與 Excel 標題一致
                 new_entries.append({
                     "進貨單號": f"'{pur_id}",
                     "採購日期": self.var_pur_date.get(),
                     "入庫日期": "",  
                     "供應商": supplier if supplier else "未填",
-                    "物流追蹤": "待發貨", # <--- 這裡要固定叫做「物流追蹤」
+                    "物流追蹤": "待發貨",
                     "商品名稱": item['name'],
                     "數量": item['qty'],
                     "進貨單價": item['cost'],
                     "進貨總額": item['total'],
                     "進項稅額": item['tax'],
+                    "海關稅金": 0.0,  # 強制給預設值 0，防止出現 NaN
+                    "分攤運費": 0.0,  # 強制給預設值 0，防止出現 NaN
                     "備註": "在途"
                 })
             
@@ -725,31 +746,34 @@ class SalesApp:
 
 
     def load_purchase_tracking(self):
-        """ 載入待收貨清單：精準填入 8 個欄位資料 """
-        # 清空 UI 列表
         for i in self.tree_pur_track.get_children(): 
             self.tree_pur_track.delete(i)
             
         try:
             if not os.path.exists(FILE_NAME): return
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_PUR_TRACKING)
+            
+            # --- [核心修正：載入時自動補零] ---
+            # pd.to_numeric 會把非數字轉為 NaN，再用 fillna(0) 把 NaN 全部變回 0
+            df['海關稅金'] = pd.to_numeric(df.get('海關稅金', 0), errors='coerce').fillna(0)
+            df['分攤運費'] = pd.to_numeric(df.get('分攤運費', 0), errors='coerce').fillna(0)
+            
             if df.empty: return
 
             for idx, row in df.iterrows():
-                # 按順序填入 values:
-                # 0:單號, 1:供應商, 2:商品名稱, 3:數量, 4:單價, 5:稅額, 6:運費, 7:物流
                 self.tree_pur_track.insert("", "end", text=str(idx), values=(
                     str(row.get('進貨單號', '')).replace("'", ""),
                     row.get('供應商', '未填'),
                     row.get('商品名稱', '未知'),
                     row.get('數量', 0),
                     row.get('進貨單價', 0),
-                    row.get('海關稅金', 0), # 稅金放在索引 5
-                    row.get('分攤運費', 0), # 運費放在索引 6
-                    row.get('物流追蹤', '待發貨') # 物流放在索引 7
+                    row.get('海關稅金', 0), # 現在這裡絕對會是數字
+                    row.get('分攤運費', 0), # 現在這裡絕對會是數字
+                    row.get('物流追蹤', '待發貨')
                 ))
         except Exception as e:
             print(f"載入追蹤清單出錯: {e}")
+
 
     def setup_pur_tracking_tab(self):
         """ 建立在途貨物追蹤：增加獨立的運費欄位 """
@@ -782,12 +806,119 @@ class SalesApp:
         # 下方按鈕區不變...
         btn_ctrl = ttk.Frame(frame, padding=10)
         btn_ctrl.pack(fill="x")
-        ttk.Button(btn_ctrl, text="✏️ 補充運費/稅金/物流號", command=self.action_update_pur_logistics).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="✏️ 補充修改單項資訊", command=self.action_update_pur_logistics).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="⚖️ 整單運費稅金自動分攤", command=self.action_batch_distribute_shipping).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="✅ 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="❌ 標記遺失/取消", command=self.action_cancel_purchase).pack(side="left", padx=5)
 
         self.load_purchase_tracking()
 
+
+    def action_batch_distribute_shipping(self):
+        """ 彈出視窗：輸入整筆單據的總運費/稅金，並依重量權重自動分攤 """
+        sel = self.tree_pur_track.selection()
+        if not sel:
+            messagebox.showwarning("提示", "請先選擇該訂單中的任意一個商品項目")
+            return
+            
+        item = self.tree_pur_track.item(sel[0])
+        target_pur_id = str(item['values'][0]).replace("'", "").strip()
+
+        win = tk.Toplevel(self.root)
+        win.title(f"整單運費分攤 - {target_pur_id}")
+        win.geometry("400x300")
+        win.grab_set()
+
+        ttk.Label(win, text=f"正在處理單號: {target_pur_id}", foreground="blue").pack(pady=10)
+        
+        body = ttk.Frame(win, padding=20)
+        body.pack(fill="both")
+
+        ttk.Label(body, text="這箱貨物的「總運費」($):").pack(anchor="w")
+        var_total_ship = tk.DoubleVar(value=0.0)
+        ttk.Entry(body, textvariable=var_total_ship).pack(fill="x", pady=5)
+
+        ttk.Label(body, text="這箱貨物的「總稅金」($):").pack(anchor="w", pady=(10,0))
+        var_total_tax = tk.DoubleVar(value=0.0)
+        ttk.Entry(body, textvariable=var_total_tax).pack(fill="x", pady=5)
+
+        def calculate_and_save():
+            try:
+                total_s = var_total_ship.get()
+                total_t = var_total_tax.get()
+                
+                with pd.ExcelFile(FILE_NAME) as xls:
+                    df_track = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
+                    df_hist = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
+                    df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
+
+                # --- [核心修正 1：強制轉型為浮點數] ---
+                # 這樣就不會再出現 "Invalid value for dtype int64" 的錯誤
+                for df in [df_track, df_hist]:
+                    for col in ['分攤運費', '海關稅金']:
+                        if col not in df.columns: df[col] = 0.0
+                        # 關鍵：先轉成 numeric (處理 NaN)，再強制轉成 float 類型
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
+                
+                # 商品資料的權重也要確保是數字
+                if '單位權重' not in df_prods.columns: df_prods['單位權重'] = 1.0
+                df_prods['單位權重'] = pd.to_numeric(df_prods['單位權重'], errors='coerce').fillna(1.0).astype(float)
+
+                # 建立重量地圖
+                weight_map = df_prods.set_index('商品名稱')['單位權重'].to_dict()
+
+                # 清理匹配用的 ID
+                df_track['tmp_id'] = df_track['進貨單號'].astype(str).str.replace("'", "").str.strip()
+                mask = df_track['tmp_id'] == target_pur_id
+                
+                # 1. 計算總權重
+                order_total_weight = 0
+                for _, row in df_track[mask].iterrows():
+                    p_name = str(row['商品名稱']).strip()
+                    qty = float(row.get('數量', 1))
+                    u_weight = weight_map.get(p_name, 1.0)
+                    order_total_weight += (qty * u_weight)
+
+                if order_total_weight == 0: order_total_weight = 1
+
+                # 2. 開始分配 (小數點保留至第一位)
+                for idx in df_track[mask].index:
+                    p_name = str(df_track.at[idx, '商品名稱']).strip()
+                    qty = float(df_track.at[idx, '數量'])
+                    u_weight = weight_map.get(p_name, 1.0)
+                    
+                    share_ratio = (qty * u_weight) / order_total_weight
+                    
+                    # --- [核心修正 2：保留小數點第一位] ---
+                    alloc_s = round(total_s * share_ratio, 1)
+                    alloc_t = round(total_t * share_ratio, 1)
+
+                    df_track.at[idx, '分攤運費'] = alloc_s
+                    df_track.at[idx, '海關稅金'] = alloc_t
+                    
+                    # 同步歷史總表
+                    df_hist['tmp_id'] = df_hist['進貨單號'].astype(str).str.replace("'", "").str.strip()
+                    h_mask = (df_hist['tmp_id'] == target_pur_id) & (df_hist['商品名稱'].astype(str).str.strip() == p_name)
+                    
+                    # 確保歷史總表的欄位也接受浮點數
+                    df_hist.loc[h_mask, '分攤運費'] = alloc_s
+                    df_hist.loc[h_mask, '海關稅金'] = alloc_t
+
+                # 存檔前清理
+                df_track.drop(columns=['tmp_id'], inplace=True, errors='ignore')
+                df_hist.drop(columns=['tmp_id'], inplace=True, errors='ignore')
+                
+                if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
+                    messagebox.showinfo("成功", f"分攤完畢！\n已將運費與稅金分配至各品項 (保留1位小數)")
+                    self.load_purchase_tracking()
+                    win.destroy()
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                messagebox.showerror("計算失敗", f"發生型別錯誤: {str(e)}\n請檢查 Excel 欄位格式。")
+
+        ttk.Button(win, text="🚀 開始自動分攤並儲存", command=calculate_and_save).pack(pady=20)
 
        # ================= 營收與商品分析 (新功能) =================
     def setup_analysis_tab(self):
@@ -1759,6 +1890,11 @@ class SalesApp:
         ttk.Label(self.frame_left, text="* 商品名稱:").pack(anchor="w")
         ttk.Entry(self.frame_left, textvariable=self.var_add_name).pack(fill="x", pady=2)
 
+        #4. 單位權重 
+        if self.show_fields["單位權重"].get():
+            ttk.Label(self.frame_left, text="單位權重 (g):").pack(anchor="w")
+            ttk.Entry(self.frame_left, textvariable=self.var_add_weight).pack(fill="x", pady=2)
+
         # 4. 安全庫存 (可選)
         if self.show_fields["安全庫存"].get():
             ttk.Label(self.frame_left, text="安全庫存量:").pack(anchor="w")
@@ -1799,9 +1935,15 @@ class SalesApp:
         ttk.Label(self.edit_frame, text="名稱:").grid(row=curr_row, column=0, **e_opts)
         ttk.Entry(self.edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=curr_row, column=1, sticky="ew")
         
+
         if self.show_fields["商品編號"].get():
             ttk.Label(self.edit_frame, text="編號:").grid(row=curr_row, column=2, **e_opts)
             ttk.Entry(self.edit_frame, textvariable=self.var_upd_sku).grid(row=curr_row, column=3, sticky="ew")
+        curr_row += 1
+
+        if self.show_fields["單位權重"].get():
+            ttk.Label(self.edit_frame, text="單位權重 (g/支):").grid(row=curr_row, column=0, **e_opts)
+            ttk.Entry(self.edit_frame, textvariable=self.var_upd_weight).grid(row=curr_row, column=1, sticky="ew")
         curr_row += 1
 
         if self.show_fields["分類Tag"].get():
@@ -1820,6 +1962,11 @@ class SalesApp:
         if self.show_fields["安全庫存"].get():
             ttk.Label(self.edit_frame, text="安全量:").grid(row=curr_row, column=0, **e_opts)
             ttk.Entry(self.edit_frame, textvariable=self.var_upd_safety).grid(row=curr_row, column=1, sticky="ew")
+            curr_row += 1
+
+        if self.show_fields["單位權重"].get():
+            ttk.Label(self.edit_frame, text="單位權重(g):").grid(row=curr_row, column=0, **e_opts)
+            ttk.Entry(self.edit_frame, textvariable=self.var_upd_weight).grid(row=curr_row, column=1, sticky="ew")
             curr_row += 1
 
         if self.show_fields["商品連結"].get():
@@ -2656,37 +2803,67 @@ class SalesApp:
         self.refresh_fee_tree()
 
     def refresh_fee_tree(self):
-            if hasattr(self, 'fee_tree'):
-                for i in self.fee_tree.get_children(): self.fee_tree.delete(i)
+        """ 修正版：確保正確載入費率，並過濾掉非費率的系統設定 """
+        # 1. 清空舊有的表格顯示
+        if hasattr(self, 'fee_tree'):
+            for i in self.fee_tree.get_children(): 
+                self.fee_tree.delete(i)
+        
+        self.fee_lookup = {} # 重新初始化對照表
+        fee_options = ["自訂手動輸入"]
+
+        try:
+            if not os.path.exists(FILE_NAME): return
             
-            self.fee_lookup = {} # 清空舊資料
+            # 讀取系統設定分頁
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
             
-            try:
-                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-                fee_options = ["自訂手動輸入"]
+            # 移除全空的行
+            df = df.dropna(subset=['設定名稱'])
+
+            for _, row in df.iterrows():
+                name = str(row['設定名稱']).strip()
                 
-                for _, row in df.iterrows():
-                    name = str(row['設定名稱']).strip()
+                # --- [關鍵修正：跳過系統保留設定] ---
+                # 不把「商家名稱」顯示在費率下拉選單中
+                if name == "SYSTEM_SHOP_NAME": 
+                    continue
+                
+                try:
+                    # 確保費率和固定金額是數字
                     perc = float(row['費率百分比'])
                     fixed = float(row.get('固定金額', 0))
-                    
-                    # --- 核心改動：存入對照表 ---
-                    display_str = f"{name} ({perc}% + ${fixed})" if fixed > 0 else f"{name} ({perc}%)"
-                    self.fee_lookup[display_str] = (perc, fixed) # 用「顯示字串」當 Key
-                    
-                    fee_options.append(display_str)
-                    if hasattr(self, 'fee_tree'):
-                        self.fee_tree.insert("", "end", values=(name, perc, fixed))
+                except (ValueError, TypeError):
+                    # 如果這行不是數字（例如是店名），就跳過
+                    continue
                 
-                if hasattr(self, 'combo_fee_rate'):
-                    self.combo_fee_rate['values'] = fee_options
-                    # 預設選取第一個有效費率
-                    if len(fee_options) > 1:
-                        self.combo_fee_rate.set(fee_options[1])
-                    else:
-                        self.combo_fee_rate.set("自訂手動輸入")
-            except:
-                pass
+                # 2. 建立顯示文字
+                display_str = f"{name} ({perc}% + ${fixed})" if fixed > 0 else f"{name} ({perc}%)"
+                
+                # 3. 存入記憶體對照表 (Key 是顯示字串，Value 是數值元組)
+                self.fee_lookup[display_str] = (perc, fixed)
+                fee_options.append(display_str)
+                
+                # 更新設定頁面的表格清單
+                if hasattr(self, 'fee_tree'):
+                    self.fee_tree.insert("", "end", values=(name, perc, fixed))
+            
+            # 4. 更新銷售頁面的選單內容
+            if hasattr(self, 'combo_fee_rate'):
+                self.combo_fee_rate['values'] = fee_options
+                
+                # 5. --- [核心修正：強制設定預設值] ---
+                if len(fee_options) > 1:
+                    # 選取第一個從 Excel 讀到的正式費率
+                    self.combo_fee_rate.set(fee_options[1])
+                else:
+                    self.combo_fee_rate.set("自訂手動輸入")
+                
+                # 6. 立即觸發一次總額計算，讓介面數字跳動
+                self.update_totals()
+                
+        except Exception as e:
+            print(f"費率載入錯誤: {e}")
 
     def action_add_custom_fee(self):
         #""" 新增或更新自訂費率 (修正版：解決 df 變數未定義問題) """
@@ -2909,109 +3086,113 @@ class SalesApp:
             messagebox.showerror("錯誤", f"取消失敗: {e}")
 
     def action_confirm_inbound(self):
-        """ [修正版] 確認收貨：解決日期格式 float64 報錯，並精準計算落地成本 """
+        """ [強力轉型版] 確認收貨：徹底解決 float64 型別衝突 """
         sel = self.tree_pur_track.selection()
         if not sel: 
-            messagebox.showwarning("提示", "請先選擇要入庫的項目")
+            messagebox.showwarning("提示", "請先選擇要入庫的單據項目")
             return
         
-        # 1. 從介面取得 8 個欄位的數值 (對齊索引)
         item = self.tree_pur_track.item(sel[0])
-        idx_in_track_df = int(item['text']) 
-        vals = item['values'] 
+        target_pur_id = str(item['values'][0]).replace("'", "").strip()
 
-        pur_id = str(vals[0]).replace("'", "") # 單號
-        p_name = vals[2]                       # 商品名稱
-        new_qty = int(vals[3])                 # 數量
-        new_price = float(vals[4])             # 進貨單價
-        customs_tax = float(vals[5])           # 稅額 (索引 5)
-        ship_fee = float(vals[6])              # 運費 (索引 6)
-
-        if not messagebox.askyesno("確認入庫", f"商品: {p_name}\n即將入庫 {new_qty} 件。\n(含運費 ${ship_fee}, 稅金 ${customs_tax})\n\n系統將自動更新庫存並攤平平均成本。"):
+        if not messagebox.askyesno("整筆入庫確認", f"確認將進貨單號：[{target_pur_id}] \n內的所有商品全部執行「入庫」嗎？"):
             return
 
         try:
             today_str = datetime.now().strftime("%Y-%m-%d")
+            now_full = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-            # 2. 讀取 Excel 內容
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
                 df_tracking = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
                 df_history = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
 
-            # --- [核心修正：解決 float64 格式報錯] ---
-            # 強制將入庫日期轉為 object (字串) 格式，避免 Pandas 報錯
-            if '入庫日期' in df_history.columns:
-                df_history['入庫日期'] = df_history['入庫日期'].astype(object).fillna("")
-            
-            # 確保運費與稅額欄位存在且為數值
-            for col in ['分攤運費', '海關稅金']:
-                if col not in df_history.columns: df_history[col] = 0.0
-                df_history[col] = pd.to_numeric(df_history[col], errors='coerce').fillna(0.0)
+            # --- [核心暴力修正：立即切斷 float64 的聯繫] ---
+            # 針對可能出錯的文字欄位，讀取後「立刻」強行轉換為純字串，並把 nan 字串清空
+            for col in ['入庫日期', '備註', '物流追蹤', '進貨單號']:
+                if col in df_history.columns:
+                    # 先轉成字串，再把 'nan' 取代掉，這能徹底解決 float64 問題
+                    df_history[col] = df_history[col].astype(str).replace('nan', '')
+                else:
+                    # 萬一欄位不見了，補回空字串列
+                    df_history[col] = ""
 
-            # 3. 【計算落地成本 (Landed Cost)】
-            # 本批次總投入 = (數量 * 進價) + 運費 + 稅金
-            current_batch_total_cost = (new_qty * new_price) + ship_fee + customs_tax
-            
-            if p_name in df_prods['商品名稱'].values:
-                p_idx = df_prods[df_prods['商品名稱'] == p_name].index[0]
-                
-                # 取得舊庫存與舊成本
-                old_stock = float(df_prods.at[p_idx, '目前庫存']) if pd.notna(df_prods.at[p_idx, '目前庫存']) else 0
-                old_cost = float(df_prods.at[p_idx, '預設成本']) if pd.notna(df_prods.at[p_idx, '預設成本']) else 0
-                
-                total_qty = old_stock + new_qty
-                
-                # 加權平均成本公式
-                if total_qty > 0:
-                    if old_stock <= 0:
-                        # 原本沒貨或超賣，直接以本次總成本攤平
-                        weighted_cost = current_batch_total_cost / new_qty
-                    else:
-                        # 公式：(舊庫存總值 + 本批總值) / 總數量
-                        weighted_cost = ((old_stock * old_cost) + current_batch_total_cost) / total_qty
-                    
-                    # A. 更新商品庫存與「落地」成本
-                    df_prods.at[p_idx, '預設成本'] = round(weighted_cost, 2)
-                    df_prods.at[p_idx, '目前庫存'] = total_qty
-                    df_prods.at[p_idx, '最後進貨時間'] = today_str
-                    df_prods.at[p_idx, '最後更新時間'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            # 對於數值欄位，確保它們是數字型態，防止出現奇怪的字串
+            for col in ['分攤運費', '海關稅金', '數量', '進貨單價']:
+                if col in df_history.columns:
+                    df_history[col] = pd.to_numeric(df_history[col], errors='coerce').fillna(0.0)
 
-            # 4. 【同步更新進貨紀錄總帳】
-            clean_id = str(pur_id).replace("'", "")
-            # 建立暫時過濾欄位避免修改到原始編號
+            # --- 建立臨時匹配 ID ---
+            df_tracking['tmp_id'] = df_tracking['進貨單號'].astype(str).str.replace("'", "").str.strip()
             df_history['tmp_id'] = df_history['進貨單號'].astype(str).str.replace("'", "").str.strip()
-            mask = (df_history['tmp_id'] == clean_id) & (df_history['商品名稱'] == p_name)
             
-            if not df_history[mask].empty:
-                df_history.loc[mask, '入庫日期'] = today_str
-                df_history.loc[mask, '備註'] = "已完成入庫"
-                df_history.loc[mask, '分攤運費'] = ship_fee
-                df_history.loc[mask, '海關稅金'] = customs_tax
+            batch_items = df_tracking[df_tracking['tmp_id'] == target_pur_id].copy()
             
-            df_history.drop(columns=['tmp_id'], inplace=True)
+            if batch_items.empty:
+                messagebox.showerror("錯誤", f"找不到單號 {target_pur_id}")
+                return
 
-            # 5. 【移除追蹤清單】
-            df_tracking.drop(idx_in_track_df, inplace=True)
+            # 處理每一個品項
+            for _, row in batch_items.iterrows():
+                p_name = str(row['商品名稱']).strip()
+                new_qty = float(row.get('數量', 0))
+                new_price = float(row.get('進貨單價', 0))
+                
+                # 清理運費稅金
+                ship_fee = pd.to_numeric(row.get('分攤運費', 0), errors='coerce')
+                tax_fee = pd.to_numeric(row.get('海關稅金', 0), errors='coerce')
+                ship_fee = 0.0 if pd.isna(ship_fee) else ship_fee
+                tax_fee = 0.0 if pd.isna(tax_fee) else tax_fee
 
-            # 6. 【萬用引擎存檔】
-            save_success = self._universal_save({
+                # A. 更新商品庫存與成本 (WAC)
+                p_mask = df_prods['商品名稱'].astype(str).str.strip() == p_name
+                if not df_prods[p_mask].empty:
+                    p_idx = df_prods[p_mask].index[0]
+                    old_stock = pd.to_numeric(df_prods.at[p_idx, '目前庫存'], errors='coerce')
+                    old_cost = pd.to_numeric(df_prods.at[p_idx, '預設成本'], errors='coerce')
+                    old_stock = 0.0 if pd.isna(old_stock) else old_stock
+                    old_cost = 0.0 if pd.isna(old_cost) else old_cost
+                    
+                    total_val = (old_stock * old_cost) + (new_qty * new_price) + ship_fee + tax_fee
+                    total_qty = old_stock + new_qty
+                    
+                    if total_qty > 0:
+                        new_wac = total_val / total_qty
+                        df_prods.at[p_idx, '預設成本'] = round(new_wac, 2)
+                        df_prods.at[p_idx, '目前庫存'] = int(total_qty)
+                        df_prods.at[p_idx, '最後進貨時間'] = today_str
+                        df_prods.at[p_idx, '最後更新時間'] = now_full
+
+                # B. 更新進貨歷史總表
+                h_mask = (df_history['tmp_id'] == target_pur_id) & (df_history['商品名稱'] == p_name)
+                if not df_history[h_mask].empty:
+                    # 這裡現在絕對是字串欄位了，賦值不會再跳 float64 錯誤
+                    df_history.loc[h_mask, '入庫日期'] = today_str
+                    df_history.loc[h_mask, '備註'] = "已完成入庫"
+                    df_history.loc[h_mask, '分攤運費'] = ship_fee
+                    df_history.loc[h_mask, '海關稅金'] = tax_fee
+
+            # 5. 移除追蹤與清理輔助欄位
+            df_tracking_new = df_tracking[df_tracking['tmp_id'] != target_pur_id].copy()
+            df_tracking_new.drop(columns=['tmp_id'], inplace=True, errors='ignore')
+            df_history.drop(columns=['tmp_id'], inplace=True, errors='ignore')
+
+            # 6. 存檔
+            if self._universal_save({
                 SHEET_PRODUCTS: df_prods,
-                SHEET_PUR_TRACKING: df_tracking,
+                SHEET_PUR_TRACKING: df_tracking_new,
                 SHEET_PURCHASES: df_history
-            })
-
-            if save_success:
-                messagebox.showinfo("成功", f"【入庫完成】\n商品: {p_name}\n庫存已補至: {total_qty}\n平均成本(含運費稅金): ${round(weighted_cost, 2)}")
-                self.load_purchase_tracking() 
-                self.products_df = self.load_products() 
-                self.update_sales_prod_list() 
+            }):
+                messagebox.showinfo("成功", f"單號 [{target_pur_id}] 及其商品已全數入庫。")
+                self.load_purchase_tracking()
+                self.products_df = self.load_products()
+                self.update_sales_prod_list()
+                self.calculate_analysis_data()
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            messagebox.showerror("入庫失敗", f"發生錯誤: {str(e)}")
-
+            messagebox.showerror("入庫發生嚴重錯誤", str(e))
 
 
     def update_pur_prod_list(self):
@@ -3037,6 +3218,7 @@ class SalesApp:
             
             # 可選：選中後自動刷新 values 回全部清單，方便下次搜尋
             self.combo_pur_prod['values'] = self.products_df['商品名稱'].tolist()
+
 
     def add_to_pur_cart(self):
         """ 加入商品到進貨購物車 (修正為總額直乘稅率邏輯) """
@@ -3178,91 +3360,85 @@ class SalesApp:
 
 
     def action_update_pur_logistics(self):
-        """ 彈出視窗：修正讀取索引 """
+        """ 彈出視窗：僅修正到貨數量與物流追蹤號 """
         sel = self.tree_pur_track.selection()
-        if not sel: return
+        if not sel: 
+            messagebox.showwarning("提示", "請先選擇要修改的商品項目")
+            return
         
         item = self.tree_pur_track.item(sel[0])
-        idx = int(item['text'])
-        vals = item['values'] # 取得 8 個欄位的陣列
+        vals = item['values'] 
         
-        pur_id = str(vals[0])
-        p_name = vals[2]
-
-        win = tk.Toplevel(self.root)
-        win.title("更新物流與附加成本")
-        win.geometry("350x400")
-        
-        # 抓取目前的舊資料
-        old_tax = vals[5]
-        old_ship = vals[6]
+        # 1. 取得並清理當前選中的基礎資料
+        raw_pur_id = str(vals[0]).replace("'", "").strip() 
+        p_name = str(vals[2]).strip()
+        old_qty = vals[3]    
         old_logi = vals[7]
 
-        ttk.Label(win, text=f"單號: {pur_id}", foreground="gray").pack(pady=5)
-        ttk.Label(win, text=f"商品: {p_name}", font=("", 10, "bold")).pack(pady=5)
+        win = tk.Toplevel(self.root)
+        win.title("貨物狀態維護")
+        win.geometry("380x350") # 縮小視窗高度
+        win.grab_set() 
 
-        ttk.Label(win, text="1. 物流單號:").pack(anchor="w", padx=30)
+        # 頂部資訊
+        info_f = ttk.Frame(win, padding=15)
+        info_f.pack(fill="x")
+        ttk.Label(info_f, text=f"單號: {raw_pur_id}", foreground="gray").pack(anchor="w")
+        ttk.Label(info_f, text=f"商品: {p_name}", font=("", 10, "bold")).pack(anchor="w")
+
+        body = ttk.Frame(win, padding=20)
+        body.pack(fill="both", expand=True)
+        opts = {'fill': 'x', 'pady': 5}
+
+        # 欄位 A: 數量
+        ttk.Label(body, text="實際到貨數量 (毀損/少發請修正):").pack(anchor="w")
+        var_qty = tk.IntVar(value=int(old_qty))
+        ttk.Entry(body, textvariable=var_qty).pack(**opts)
+
+        # 欄位 B: 物流號
+        ttk.Label(body, text="物流單號或追蹤狀態:").pack(anchor="w", pady=(15, 0))
         var_logi = tk.StringVar(value=old_logi)
-        ttk.Entry(win, textvariable=var_logi).pack(fill="x", padx=30)
+        ttk.Entry(body, textvariable=var_logi).pack(**opts)
 
-        ttk.Label(win, text="2. 分攤運費 ($):").pack(anchor="w", padx=30, pady=(10,0))
-        var_ship = tk.DoubleVar(value=old_ship)
-        ttk.Entry(win, textvariable=var_ship).pack(fill="x", padx=30)
-
-        ttk.Label(win, text="3. 海關稅金/加稅 ($):").pack(anchor="w", padx=30, pady=(10,0))
-        var_tax = tk.DoubleVar(value=old_tax)
-        ttk.Entry(win, textvariable=var_tax).pack(fill="x", padx=30)
-
-        # 存檔按鈕邏輯保持不變，但確保讀取的是這三個變數...
-        def save_logic():
+        def perform_save():
             try:
+                new_qty = var_qty.get()
+                new_logi = var_logi.get().strip()
+
+                if new_qty < 0:
+                    messagebox.showerror("錯誤", "數量不可為負數")
+                    return
+
                 with pd.ExcelFile(FILE_NAME) as xls:
                     df_track = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
                     df_hist = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
 
+                match_count = 0
                 for df in [df_track, df_hist]:
-                    if '分攤運費' not in df.columns: df['分攤運費'] = 0
-                    if '海關稅金' not in df.columns: df['海關稅金'] = 0
+                    # 清理 ID 以便匹配
+                    clean_df_ids = df['進貨單號'].astype(str).str.replace("'", "").str.strip()
+                    clean_df_names = df['商品名稱'].astype(str).str.strip()
+                    m = (clean_df_ids == raw_pur_id) & (clean_df_names == p_name)
                     
-                    m = (df['進貨單號'].astype(str).str.contains(pur_id)) & (df['商品名稱'] == p_name)
-                    df.loc[m, '物流追蹤'] = var_logi.get()
-                    df.loc[m, '分攤運費'] = var_ship.get()
-                    df.loc[m, '海關稅金'] = var_tax.get()
+                    if not df[m].empty:
+                        # 僅更新數量與物流
+                        df.loc[m, '數量'] = new_qty
+                        df.loc[m, '物流追蹤'] = new_logi
+                        
+                        # 數量變動必須同步重算「進貨總額」(維持會計準確)
+                        u_price = pd.to_numeric(df.loc[m, '進貨單價'], errors='coerce').fillna(0)
+                        df.loc[m, '進貨總額'] = new_qty * u_price
+                        match_count += 1
 
                 if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
-                    messagebox.showinfo("成功", "資料已更新")
-                    self.load_purchase_tracking()
-                    win.destroy()
-            except Exception as e: messagebox.showerror("錯誤", str(e))
-
-        ttk.Button(win, text="💾 儲存修改", command=save_logic).pack(pady=25)
-
-        def save_and_close():
-            try:
-                with pd.ExcelFile(FILE_NAME) as xls:
-                    df_track = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
-                    df_hist = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
-
-                # 更新資料
-                for df in [df_track, df_hist]:
-                    # 這裡要確保 Excel 有這兩個欄位
-                    if '分攤運費' not in df.columns: df['分攤運費'] = 0
-                    if '海關稅金' not in df.columns: df['海關稅金'] = 0
+                    messagebox.showinfo("成功", "貨物資訊已更新")
+                    self.load_purchase_tracking() 
+                    win.destroy() 
                     
-                    # 匹配單號與商品
-                    m = (df['進貨單號'].astype(str).str.contains(pur_id)) & (df['商品名稱'] == p_name)
-                    df.loc[m, '物流追蹤'] = var_logi.get()
-                    df.loc[m, '分攤運費'] = var_ship.get()
-                    df.loc[m, '海關稅金'] = var_tax.get()
-
-                self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist})
-                messagebox.showinfo("成功", "附加成本已更新")
-                self.load_purchase_tracking()
-                win.destroy()
             except Exception as e:
-                messagebox.showerror("錯誤", str(e))
+                messagebox.showerror("錯誤", f"儲存失敗: {str(e)}")
 
-        ttk.Button(win, text="💾 儲存並更新", command=save_and_close).pack(pady=20)
+        ttk.Button(win, text="💾 確認修正", command=perform_save).pack(pady=20)
 
     
     def action_track_delete_item(self):
@@ -3826,36 +4002,57 @@ class SalesApp:
 
    
     def on_mgmt_prod_select(self, event):
+        """ 當點選商品清單時，即時將資料填入右側編輯區 """
         selection = self.listbox_mgmt.curselection()
-        if selection:
-            display_str = self.listbox_mgmt.get(selection[0])
-            try:
-                temp = display_str.rsplit(" (庫存:", 1)[0]
-                selected_name = temp.split("]", 1)[1].strip() if "]" in temp else temp
-            except:
-                return
+        if not selection: 
+            return
 
-            record = self.products_df[self.products_df['商品名稱'] == selected_name]
+        # 1. 優先定義清理工具函式 (確保在呼叫前已存在)
+        def clean_val(val, default="", is_num=False):
+            if pd.isna(val) or str(val).lower() == "nan":
+                return 0.0 if is_num else default
+            return val
+
+        try:
+            # 2. 解析 Listbox 選中的字串
+            display_str = self.listbox_mgmt.get(selection[0])
+            # 格式: [分類] 商品名稱 (庫存: 數量)
+            temp = display_str.rsplit(" (庫存:", 1)[0]
+            selected_name = temp.split("]", 1)[1].strip() if "]" in temp else temp
+
+            # 3. 搜尋對應資料 (加上 strip 防止空格干擾)
+            record = self.products_df[self.products_df['商品名稱'].astype(str).str.strip() == selected_name]
+            
             if not record.empty:
                 row = record.iloc[0]
-                
-                # --- 核心修正：定義一個清理函數來處理 NaN ---
-                def clean_val(val, default=""):
-                    if pd.isna(val): return default
-                    return val
 
-                # 確保填入 UI 的資料不會出現 "NaN" 字樣
+                # 4. 填入字串類欄位
                 self.var_upd_sku.set(clean_val(row.get('商品編號', '')))
-                self.var_upd_name.set(clean_val(row['商品名稱']))
+                self.var_upd_name.set(clean_val(row.get('商品名稱', '')))
                 self.var_upd_tag.set(clean_val(row.get('分類Tag', '')))
                 self.var_upd_url.set(clean_val(row.get('商品連結', '')))
                 self.var_upd_remarks.set(clean_val(row.get('商品備註', '')))
                 
-                # 數值欄位若為 NaN 則設為 0
-                self.var_upd_safety.set(int(clean_val(row.get('安全庫存', 0), 0)))
-                self.var_upd_stock.set(int(clean_val(row['目前庫存'], 0)))
-                self.var_upd_cost.set(float(clean_val(row['預設成本'], 0.0)))
-                self.var_upd_time.set(clean_val(row['最後更新時間'], "無資料"))
+                # 5. 填入數值類欄位 (加入 is_num=True 確保 NaN 會變回 0)
+                self.var_upd_safety.set(int(clean_val(row.get('安全庫存', 0), is_num=True)))
+                self.var_upd_stock.set(int(clean_val(row.get('目前庫存', 0), is_num=True)))
+                self.var_upd_cost.set(float(clean_val(row.get('預設成本', 0.0), is_num=True)))
+                
+                # 6. 填入單位權重 (特別處理)
+                if hasattr(self, 'var_upd_weight'):
+                    weight_val = row.get('單位權重', 1.0)
+                    # 如果重量是空的，給預設值 1.0
+                    if pd.isna(weight_val) or str(weight_val).lower() == "nan":
+                        weight_val = 1.0
+                    self.var_upd_weight.set(float(weight_val))
+
+                self.var_upd_time.set(clean_val(row.get('最後更新時間', '無資料')))
+
+        except Exception as e:
+            # 在後台印出錯誤細節，方便除錯
+            import traceback
+            traceback.print_exc()
+            print(f"商品選取顯示失敗: {e}")
 
     def submit_new_product(self):
         """ 建立新商品：URL 與 備註改為選填 """
@@ -3881,7 +4078,9 @@ class SalesApp:
                 "最後進貨時間": "",
                 "安全庫存": self.var_add_safety.get(),
                 "商品連結": url if url else "無",     # 選填
-                "商品備註": remarks if remarks else "無" # 選填
+                "商品備註": remarks if remarks else "無", # 選填
+                "單位權重": self.var_add_weight.get()
+
             }
             
             df_new = pd.concat([self.products_df, pd.DataFrame([new_row])], ignore_index=True)
@@ -3912,6 +4111,9 @@ class SalesApp:
 
             try: new_safety = int(self.var_upd_safety.get())
             except: new_safety = 0
+
+            try: new_weight = float(self.var_upd_weight.get())
+            except: new_weight = 1.0
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             
@@ -3944,6 +4146,7 @@ class SalesApp:
                 df_prods.loc[idx, '安全庫存'] = new_safety
                 df_prods.loc[idx, '商品連結'] = self.var_upd_url.get()
                 df_prods.loc[idx, '商品備註'] = self.var_upd_remarks.get()
+                df_prods.loc[idx, '單位權重'] = new_weight
                 df_prods.loc[idx, '最後更新時間'] = now_str
                 
                 # --- [呼叫萬用存檔引擎] ---
