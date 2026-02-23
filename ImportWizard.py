@@ -1,5 +1,3 @@
-#excel快速匯入插件
-
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
@@ -13,168 +11,186 @@ except ImportError:
 class ImportWizard(tk.Toplevel):
     def __init__(self, parent, save_callback):
         super().__init__(parent)
-        self.title("🚀 商品資料批次匯入精靈 (安全強化版)")
-        self.geometry("1100x750")
+        self.title("🚀 商品資料批次匯入精靈 (經典表格版)")
+        self.geometry("1200x850")
         self.save_callback = save_callback 
         self.import_raw_df = pd.DataFrame()
         
-        # 定義必填欄位
+        # ERP 核心必填欄位
         self.REQUIRED_FIELDS = ["商品名稱", "目前庫存", "預設成本"]
         
         self.grab_set()
         self.setup_ui()
 
     def setup_ui(self):
-        # 頂部說明
+        # 頂部：檔案選取區
         header = ttk.Frame(self, padding=20)
         header.pack(fill="x")
-        ttk.Label(header, text="Step 1: 開啟 Excel 檔案", font=("", 12, "bold")).pack(side="left")
+        ttk.Label(header, text="Step 1: 開啟舊有的商品 Excel", font=("微軟正黑體", 12, "bold")).pack(side="left")
         ttk.Button(header, text="📁 選擇檔案", command=self.load_file).pack(side="left", padx=10)
         self.lbl_path = ttk.Label(header, text="尚未選取檔案", foreground="gray")
         self.lbl_path.pack(side="left")
 
-        # 中間區域
+        # 中間：雙欄佈局 (左表格預覽，右映射設定)
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=20)
 
-        # 左：預覽
-        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽", padding=5)
+        # --- 左側：回歸本來的表格 UI ---
+        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽 (tksheet)", padding=5)
         paned.add(left_f, weight=3)
+        
         if Sheet:
             self.sheet = Sheet(left_f, data=[[]], show_row_index=True)
             self.sheet.pack(fill="both", expand=True)
             self.sheet.enable_bindings()
         else:
-            ttk.Label(left_f, text="請安裝 tksheet 以獲得最佳預覽體驗").pack()
+            # 備援方案：若使用者未安裝 tksheet，才顯示文字
+            self.sheet = tk.Text(left_f, wrap="none")
+            self.sheet.pack(fill="both", expand=True)
+            ttk.Label(left_f, text="建議安裝 tksheet 以獲得最佳表格體驗", foreground="red").pack()
 
-        # 右：欄位匹配
-        right_f = ttk.LabelFrame(paned, text="Step 3: 欄位匹配", padding=10)
+        # --- 右側：欄位映射區 ---
+        right_f = ttk.LabelFrame(paned, text="Step 3: ERP 欄位匹配設定", padding=10)
         paned.add(right_f, weight=1)
 
-        self.fields = {
-            "商品編號": tk.StringVar(value="(未匹配)"),
-            "分類Tag": tk.StringVar(value="(未匹配)"),
-            "商品名稱": tk.StringVar(value="(未匹配)"), # 必填
-            "目前庫存": tk.StringVar(value="(未匹配)"), # 必填
-            "預設成本": tk.StringVar(value="(未匹配)"), # 必填
-            "安全庫存": tk.StringVar(value="(未匹配)"),
-            "商品連結": tk.StringVar(value="(未匹配)"),
-            "商品備註": tk.StringVar(value="(未匹配)")
-        }
+        self.field_keys = [
+            "商品名稱", "商品編號", "分類Tag", "單位權重", 
+            "目前庫存", "預設成本", "安全庫存", 
+            "初始上架時間", "最後進貨時間", "商品連結", "商品備註"
+        ]
+        self.vars = {k: tk.StringVar(value="(不匯入 / 留空)") for k in self.field_keys}
 
-        for label in self.fields.keys():
-            f = ttk.Frame(right_f)
-            f.pack(fill="x", pady=2)
+        # 映射清單加入滾輪，防止欄位過多塞不下
+        container = ttk.Frame(right_f)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, width=320)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        for label in self.field_keys:
+            f = ttk.Frame(scroll_frame)
+            f.pack(fill="x", pady=4)
             
-            # 如果是必填，顯示紅色星號
             prefix = "⭐ " if label in self.REQUIRED_FIELDS else "  "
-            lbl_color = "red" if label in self.REQUIRED_FIELDS else "black"
+            ttk.Label(f, text=f"{prefix}{label}:", width=13).pack(side="left")
             
-            lbl = ttk.Label(f, text=f"{prefix}{label}:", width=12)
-            lbl.pack(side="left")
-            
-            cb = ttk.Combobox(f, textvariable=self.fields[label], state="readonly")
+            # 每一個對應欄位
+            cb = ttk.Combobox(f, textvariable=self.vars[label], state="readonly")
             cb.pack(side="left", fill="x", expand=True)
             setattr(self, f"cb_{label}", cb)
 
-        ttk.Label(right_f, text="\n⭐ 為必填項目，否則無法匯入", foreground="red", font=("", 9)).pack(anchor="w")
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        # 底部
+        ttk.Label(right_f, text="\n* 每個欄位均可選擇「不匯入」", foreground="#d9534f", font=("", 9)).pack(anchor="w")
+
+        # 底部：按鈕區
         footer = ttk.Frame(self, padding=20)
         footer.pack(fill="x")
-        ttk.Button(footer, text="✅ 執行安全匯入", command=self.execute_import, width=25, style="Accent.TButton").pack(side="right")
+        ttk.Button(footer, text="✅ 開始執行資料核對與匯入", command=self.execute_import, width=35).pack(side="right")
         ttk.Button(footer, text="❌ 取消", command=self.destroy).pack(side="right", padx=10)
 
     def load_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel 活頁簿", "*.xlsx"), ("舊版 Excel", "*.xls")])
         if not path: return
         try:
-            # 讀取時將所有資料轉為字串處理，避免讀取時就出錯
+            self.lbl_path.config(text=f"已載入: {path.split('/')[-1]}", foreground="green")
             self.import_raw_df = pd.read_excel(path).fillna("")
             headers = self.import_raw_df.columns.tolist()
             
-            if Sheet:
+            # 更新 Step 2 的表格資料
+            if Sheet and isinstance(self.sheet, Sheet):
                 self.sheet.set_sheet_data(self.import_raw_df.values.tolist())
                 self.sheet.headers(headers)
+            else:
+                self.sheet.delete("1.0", tk.END)
+                self.sheet.insert(tk.END, self.import_raw_df.to_string())
 
-            options = ["(未匹配)"] + [f"列 {i}: {h}" for i, h in enumerate(headers)]
-            for label in self.fields.keys():
+            # 更新 Step 3 的選單選項
+            options = ["(不匯入 / 留空)"] + [f"列 {i}: {h}" for i, h in enumerate(headers)]
+            
+            for label in self.field_keys:
                 cb = getattr(self, f"cb_{label}")
                 cb['values'] = options
-                # 智慧自動匹配
+                cb.set("(不匯入 / 留空)") # 預設重設，防止舊緩存
+
+                # --- 智慧自動匹配邏輯 ---
                 for opt in options:
-                    if label in opt or (label == "商品編號" and "位置" in opt):
-                        cb.set(opt); break
+                    h_low = opt.lower()
+                    if label in opt: cb.set(opt); break
+                    if label == "商品編號" and ("編號" in h_low or "sku" in h_low or "位置" in h_low): cb.set(opt); break
+                    if label == "單位權重" and ("g" in h_low or "重量" in h_low or "weight" in h_low): cb.set(opt); break
+                    if label == "分類Tag" and ("分類" in h_low or "標籤" in h_low or "tag" in h_low): cb.set(opt); break
+
         except Exception as e:
-            messagebox.showerror("錯誤", f"讀取失敗: {e}")
+            messagebox.showerror("讀取失敗", f"Excel 解析錯誤: {e}")
 
     def execute_import(self):
         if self.import_raw_df.empty: return
 
-        # 第一道防線：檢查必填項目的「對應關係」是否有選
+        # 1. 整理匹配對應表
         mapping = {}
-        missing_mapping = []
-        for label, var in self.fields.items():
+        for label, var in self.vars.items():
             val = var.get()
-            if val != "(未匹配)":
+            if val != "(不匯入 / 留空)":
                 mapping[label] = int(val.split(":")[0].replace("列 ", ""))
-            elif label in self.REQUIRED_FIELDS:
-                missing_mapping.append(label)
 
-        if missing_mapping:
-            messagebox.showerror("欄位缺失", f"請先對應以下必填欄位：\n{', '.join(missing_mapping)}")
+        # 2. 核心欄位檢查
+        missing = [f for f in self.REQUIRED_FIELDS if f not in mapping]
+        if missing:
+            messagebox.showerror("映射不全", f"您漏掉了 ERP 核心必填欄位：\n{', '.join(missing)}")
             return
 
-        # 第二道防線：資料轉換與清洗
+        # 3. 逐行資料清洗與轉換
         new_list = []
-        skip_count = 0
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        for idx, row in self.import_raw_df.iterrows():
+        for _, row in self.import_raw_df.iterrows():
             try:
-                # 1. 檢查商品名稱 (絕對不能空白)
                 p_name = str(row.iloc[mapping["商品名稱"]]).strip()
-                if not p_name or p_name.lower() == "nan":
-                    skip_count += 1
-                    continue
+                if not p_name or p_name.lower() == "nan": continue
 
-                # 2. 庫存清洗 (轉數字，失敗則補 0)
-                raw_stock = row.iloc[mapping["目前庫存"]]
-                stock = int(pd.to_numeric(raw_stock, errors='coerce')) if pd.notna(pd.to_numeric(raw_stock, errors='coerce')) else 0
+                def get_val(key, default):
+                    if key in mapping:
+                        v = row.iloc[mapping[key]]
+                        return str(v).strip() if str(v).strip() != "" else default
+                    return default
 
-                # 3. 成本清洗 (轉數字，失敗則補 0.0)
-                raw_cost = row.iloc[mapping["預設成本"]]
-                cost = float(pd.to_numeric(raw_cost, errors='coerce')) if pd.notna(pd.to_numeric(raw_cost, errors='coerce')) else 0.0
+                def get_num(key, default, is_float=False):
+                    if key in mapping:
+                        raw_v = row.iloc[mapping[key]]
+                        val = pd.to_numeric(raw_v, errors='coerce')
+                        if pd.isna(val): return default
+                        return float(val) if is_float else int(val)
+                    return default
 
                 item = {
-                    "商品編號": str(row.iloc[mapping["商品編號"]]).strip() if "商品編號" in mapping else "",
-                    "分類Tag": row.iloc[mapping["分類Tag"]] if "分類Tag" in mapping else "未分類",
+                    "商品編號": get_val("商品編號", ""),
+                    "分類Tag": get_val("分類Tag", "未分類"),
                     "商品名稱": p_name,
-                    "預設成本": cost,
-                    "目前庫存": stock,
+                    "預設成本": get_num("預設成本", 0.0, True),
+                    "目前庫存": get_num("目前庫存", 0),
                     "最後更新時間": now_str,
-                    "初始上架時間": now_str,
-                    "最後進貨時間": "",
-                    "安全庫存": int(pd.to_numeric(row.iloc[mapping["安全庫存"]], errors='coerce')) if "安全庫存" in mapping else 0,
-                    "商品連結": row.iloc[mapping["商品連結"]] if "商品連結" in mapping else "無",
-                    "商品備註": row.iloc[mapping["商品備註"]] if "商品備註" in mapping else "無"
+                    "初始上架時間": get_val("初始上架時間", now_str),
+                    "最後進貨時間": get_val("最後進貨時間", ""),
+                    "安全庫存": get_num("安全庫存", 0),
+                    "商品連結": get_val("商品連結", "無"),
+                    "商品備註": get_val("商品備註", "無"),
+                    "單位權重": get_num("單位權重", 1.0, True)
                 }
                 new_list.append(item)
-            except Exception:
-                skip_count += 1
-                continue
+            except: continue
 
         if not new_list:
-            messagebox.showwarning("警告", "沒有找到任何有效的商品資料可供匯入！")
+            messagebox.showwarning("警告", "掃描後無有效商品可匯入。")
             return
 
-        # 第三道防線：匯入確認
-        msg = f"準備匯入 {len(new_list)} 筆商品。"
-        if skip_count > 0:
-            msg += f"\n(注意：已自動跳過 {skip_count} 筆名稱空白或格式錯誤的資料)"
-        
-        if messagebox.askyesno("匯入確認", msg):
+        # 4. 最終發射
+        if messagebox.askyesno("匯入確認", f"已完成資料校準，準備匯入 {len(new_list)} 筆商品。\n確定執行嗎？"):
             if self.save_callback(new_list):
-                messagebox.showinfo("成功", "資料匯入完成！")
-
+                messagebox.showinfo("成功", "商品資料庫已完成增量更新。")
                 self.destroy()
