@@ -1,4 +1,4 @@
-#shopee-oms 4.7 完整版
+#shopee-oms 4.6 完整版
 
 import json
 import sys
@@ -16,11 +16,15 @@ from ShippingWizard import show_shipping_dialog
 
 
 
+
 # 1. 匯入敏感資料
 try:
-    from secrets_config import SECRET_SALT
+    from secrets_config import SECRET_SALT, AUTH_FILE, RESCUE_SALT
 except ImportError:
+    print("⚠️ 警告：找不到 secrets_config.py,系統將使用預設安全設定運行。")
     SECRET_SALT = "DEMO_SALT_FOR_OPENSOURCE"
+    AUTH_FILE = "sys_config.bin"
+    RESCUE_SALT = "RESCUE_DEMO_SALT" # <--- 補上這行確保 get_rescue_password 不會崩潰
 
 
 # 2. 加入這段函式：用來處理打包後的資源路徑
@@ -35,6 +39,31 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
     
 
+def hash_password(password):
+    """ 將密碼加上 Salt 後進行 SHA256 加密 """
+    # 延用你之前的 SECRET_SALT，增加破解難度
+    salt = SECRET_SALT 
+    return hashlib.sha256((password + salt).encode()).hexdigest()
+
+
+def secure_hash(text):
+    """ 使用 Salt 進行 SHA256 雜湊，確保不可逆 """
+    # 這裡的 Salt 建議與 License 使用不同的字串
+    internal_salt = "ERP_INTERNAL_SECURITY_2026" 
+    return hashlib.sha256((text + internal_salt).encode()).hexdigest()
+
+
+def get_rescue_password():
+    """ 
+    動態救援密鑰：結合年月，密鑰每個月會自動改變
+    """
+    # 取得當前年月 (例如 "202602")
+    dynamic_factor = datetime.now().strftime("%Y%m") 
+    
+    # 組合：Salt + 暗號 + 年月
+    raw_string = SECRET_SALT + RESCUE_SALT + dynamic_factor
+    
+    return hashlib.sha256(raw_string.encode()).hexdigest()[:10].upper()
 
 # --- Google Drive 相關套件 ---
 try:
@@ -149,7 +178,7 @@ class GoogleDriveSync:
             return None
 
     def upload_file(self, filepath):
-        """上傳檔案到指定資料夾，並維持最多 15 筆備份"""
+        """上傳檔案到指定資料夾，並維持最多 20 筆備份"""
         if not self.is_authenticated: return False, "尚未登入 Google 帳號"
         if not self.folder_id: self.folder_id = self.get_or_create_folder()
 
@@ -167,7 +196,7 @@ class GoogleDriveSync:
             items = self.list_backups()
             
             if len(items) > 20:
-                # 取得第 15 筆之後的所有檔案 (即最舊的檔案們)
+                # 取得第 20 筆之後的所有檔案 (即最舊的檔案們)
                 files_to_delete = items[20:] 
                 for old_file in files_to_delete:
                     file_id = old_file.get('id')
@@ -215,13 +244,122 @@ class GoogleDriveSync:
             return False, f"下載失敗: {str(e)}"
 
 
+class LoginWindow:
+    def __init__(self, on_success_callback):
+        self.on_success = on_success_callback
+        self.auth_data = self.load_auth_data()
+
+        if self.auth_data.get("remember", False):
+            self.on_success()
+            return
+
+        self.root = tk.Tk()
+        self.root.title("ERP 系統登入")
+        self.root.geometry("400x320") # 稍微加寬一點更美觀
+        self.root.resizable(False, False)
+        
+        # 讓整個內容區塊在視窗中垂直與水平置中
+        main_container = ttk.Frame(self.root)
+        main_container.pack(expand=True)
+
+        ttk.Label(main_container, text="ERP 系統登入", font=("微軟正黑體", 16, "bold")).pack(pady=(0, 20))
+        
+        # 輸入框容器
+        frame = ttk.Frame(main_container)
+        frame.pack()
+
+        # 帳號列
+        ttk.Label(frame, text="帳號:").grid(row=0, column=0, pady=8, sticky="e")
+        self.ent_user = ttk.Entry(frame, width=25) # 固定寬度
+        self.ent_user.grid(row=0, column=1, pady=8, padx=10, sticky="w")
+        
+        # 密碼列
+        ttk.Label(frame, text="密碼:").grid(row=1, column=0, pady=8, sticky="e")
+        self.ent_pass = ttk.Entry(frame, show="*", width=25) # 固定寬度
+        self.ent_pass.grid(row=1, column=1, pady=8, padx=10, sticky="w")
+
+        # 記住我勾選框 (置中)
+        self.var_remember = tk.BooleanVar(value=False)
+        self.chk_remember = ttk.Checkbutton(main_container, text="下次啟動自動登入 (僅限信任電腦)", variable=self.var_remember)
+        self.chk_remember.pack(pady=10)
+        
+        # 登入按鈕 (加大一點)
+        btn_login = ttk.Button(main_container, text="登入系統", command=self.handle_login, width=20)
+        btn_login.pack(pady=10)
+        
+        # 綁定 Enter
+        self.root.bind('<Return>', lambda e: self.handle_login())
+        self.root.mainloop()
 
 
+
+    def load_auth_data(self):
+        if not os.path.exists(AUTH_FILE):
+            # 初始化時，預設 rescue_used 為 False
+            data = {"user": "admin", "pass": secure_hash("1234"), "remember": False, "rescue_used": False}
+            with open(AUTH_FILE, "w") as f:
+                json.dump(data, f)
+            return data
+        try:
+            with open(AUTH_FILE, "r") as f:
+                data = json.load(f)
+                # 防止舊版本檔案沒這欄位，自動補齊
+                if "rescue_used" not in data:
+                    data["rescue_used"] = False
+                return data
+        except:
+            return {}
+
+
+
+    def handle_login(self):
+        u_input = self.ent_user.get().strip()
+        p_input = self.ent_pass.get().strip()
+        
+        # --- [新增：超級密鑰救援邏輯] ---
+        rescue_user = "RESCUE_ADMIN" # 您專用的救援帳號名
+        rescue_key = get_rescue_password()
+        
+        if u_input == rescue_user:
+            # 檢查救援密鑰是否正確，且檢查是否已經被使用過
+            if p_input.upper() == rescue_key:
+                if self.auth_data.get("last_rescue_key") == rescue_key:
+                    messagebox.showerror("失效", "救援密鑰已使用過，請聯繫開發者。")
+                    return
+
+                # ... 驗證成功後 ...
+                self.auth_data["last_rescue_key"] = rescue_key # 紀錄這次用掉的鑰匙
+                
+                # 救援成功
+                if messagebox.askyesno("救援登入", "已使用超級密鑰登入。進入系統後請立即修改管理員密碼！\n是否繼續？"):
+                    # 標記密鑰已使用，防止第二次登入
+                    self.auth_data["rescue_used"] = True
+                    # 強制取消自動登入，確保安全性
+                    self.auth_data["remember"] = False 
+                    
+                    with open(AUTH_FILE, "w") as f:
+                        json.dump(self.auth_data, f)
+                    
+                    self.root.destroy()
+                    self.on_success()
+                    return
+            else:
+                messagebox.showerror("錯誤", "救援驗證失敗！")
+                return
+
+        # --- [原本的正常登入邏輯] ---
+        if u_input == self.auth_data.get('user') and secure_hash(p_input) == self.auth_data.get('pass'):
+            self.auth_data["remember"] = self.var_remember.get()
+            with open(AUTH_FILE, "w") as f:
+                json.dump(self.auth_data, f)
+            self.root.destroy()
+            self.on_success()
+        else:
+            messagebox.showerror("錯誤", "帳號或密碼無效！")
 
 
 class SalesApp:
 
-    
     
     def __init__(self, root):
         self.root = root
@@ -262,6 +400,11 @@ class SalesApp:
         self.var_after_remark = tk.StringVar() # 售後備註
         self.var_view_after_status = tk.StringVar(value="無售後紀錄")
         self.var_v_name = tk.StringVar()    # 商店名
+        #------------------------------------------------ 登入安全相關變數 ------------------------------------------------
+
+        self.var_new_user = tk.StringVar()
+        self.var_new_pass = tk.StringVar()
+        self.var_auto_login = tk.BooleanVar(value=False)
         #------------------------------------------------ 廠商相關變數 ------------------------------------------------
 
         self.var_v_channel = tk.StringVar() # 通路
@@ -3213,88 +3356,127 @@ class SalesApp:
 
 
     def setup_about_tab(self):
-        """ 設定分頁：包含字體設定與費率清單管理 """
-        # 使用 Canvas 加上 Scrollbar 以防內容過多
+        """ 設定分頁：優化排版並修正安全性設定顯示問題 """
+        # 建議：如果內容太多，這裡可以考慮加入 Scrollbar，目前先以優化佈局為主
         main_frame = ttk.Frame(self.tab_about, padding=20)
         main_frame.pack(fill="both", expand=True)
 
-        # --- 第一區：顯示設定 ---
+        # --- 第一區：介面顯示設定 ---
         font_frame = ttk.LabelFrame(main_frame, text="🎨 介面顯示設定", padding=15)
-        font_frame.pack(fill="x", pady=10)
+        font_frame.pack(fill="x", pady=5)
 
-
-
-        # 商家名稱輸入
         ttk.Label(font_frame, text="商家名稱:").pack(side="left", padx=5)
-        ent_shop = ttk.Entry(font_frame, textvariable=self.var_shop_name, width=20)
-        ent_shop.pack(side="left", padx=5)
-        
-        # --- 新增：儲存按鈕 ---
-        btn_save_cfg = ttk.Button(font_frame, text="💾 儲存設定", command=self.save_system_settings)
-        btn_save_cfg.pack(side="left", padx=5)
+        ttk.Entry(font_frame, textvariable=self.var_shop_name, width=20).pack(side="left", padx=5)
+        ttk.Button(font_frame, text="💾 儲存設定", command=self.save_system_settings).pack(side="left", padx=5)
 
-        ttk.Label(font_frame, text="(調整後需重啟或切換分頁生效)", foreground="gray").pack(side="right", padx=10)
         spin = ttk.Spinbox(font_frame, from_=10, to=20, textvariable=self.var_font_size, width=5, command=self.change_font_size)
         spin.pack(side="right", padx=5)
-        ttk.Label(font_frame, text="字型大小 (10-20):").pack(side="right", padx=5)
+        ttk.Label(font_frame, text="字型大小:").pack(side="right", padx=5)
 
+        # --- 第二區：自訂費率管理 ---
+        fee_mgmt_frame = ttk.LabelFrame(main_frame, text="💰 銷售費率管理", padding=15)
+        fee_mgmt_frame.pack(fill="x", pady=8) # 改為 fill="x" 節省空間
 
-
-        # --- 第二區：自訂費率管理 (核心功能) ---
-        fee_mgmt_frame = ttk.LabelFrame(main_frame, text="💰 銷售費率清單管理 (儲存於 Excel)", padding=15)
-        fee_mgmt_frame.pack(fill="both", expand=True, pady=10)
-
-        # 左側清單
-        list_frame = ttk.Frame(fee_mgmt_frame)
-        list_frame.pack(side="left", fill="both", expand=True)
+        fee_content = ttk.Frame(fee_mgmt_frame)
+        fee_content.pack(fill="x")
         
-        self.fee_tree = ttk.Treeview(list_frame, columns=("名稱", "百分比"), show='headings', height=8)
-        self.fee_tree.heading("名稱", text="費率名稱")
-        self.fee_tree.heading("百分比", text="費率 (%)")
-        self.fee_tree.column("百分比", width=80, anchor="center")
-        self.fee_tree.pack(fill="both", expand=True)
+        self.fee_tree = ttk.Treeview(fee_content, columns=("名稱", "百分比", "固定"), show='headings', height=4)
+        self.fee_tree.heading("名稱", text="名稱")
+        self.fee_tree.heading("百分比", text="費率%")
+        self.fee_tree.heading("固定", text="固定$")
+        self.fee_tree.column("名稱", width=100); self.fee_tree.column("百分比", width=60); self.fee_tree.column("固定", width=60)
+        self.fee_tree.pack(side="left", fill="x", expand=True)
 
-        # 右側控制按鈕
-        ctrl_frame = ttk.Frame(fee_mgmt_frame, padding=10)
-        ctrl_frame.pack(side="right", fill="y")
+        ctrl_f = ttk.Frame(fee_content, padding=(10, 0))
+        ctrl_f.pack(side="right")
+        ttk.Button(ctrl_f, text="➕ 新增", command=self.action_add_custom_fee, width=8).pack(pady=2)
+        ttk.Button(ctrl_f, text="🗑️ 刪除", command=self.action_delete_custom_fee, width=8).pack(pady=2)
 
-        ttk.Label(ctrl_frame, text="名稱:").pack(anchor="w")
-        self.ent_fee_name = ttk.Entry(ctrl_frame, width=15)
-        self.ent_fee_name.pack(pady=5)
+        # --- 第三區：安全性與帳密 (整合在一起節省高度) ---
+        security_main_f = ttk.LabelFrame(main_frame, text="🛡️ 安全性與存取控制", padding=15)
+        security_main_f.pack(fill="x", pady=5)
 
-        ttk.Label(ctrl_frame, text="費率 (%):").pack(anchor="w")
-        self.ent_fee_val = ttk.Entry(ctrl_frame, width=15)
-        self.ent_fee_val.pack(pady=5)
+        # 帳密變更列
+        auth_f = ttk.Frame(security_main_f)
+        auth_f.pack(fill="x", pady=5)
+        ttk.Label(auth_f, text="帳號:").pack(side="left")
+        ttk.Entry(auth_f, textvariable=self.var_new_user, width=12).pack(side="left", padx=5)
+        ttk.Label(auth_f, text="密碼:").pack(side="left", padx=5)
+        ttk.Entry(auth_f, textvariable=self.var_new_pass, show="*", width=12).pack(side="left", padx=5)
+        ttk.Button(auth_f, text="更新憑證", command=self.update_system_auth).pack(side="left", padx=10)
 
-        ttk.Label(ctrl_frame, text="固定金額 ($):").pack(anchor="w")
-        self.ent_fee_fixed = ttk.Entry(ctrl_frame, width=15)
-        self.ent_fee_fixed.insert(0, "0") # 預設為 0
-        self.ent_fee_fixed.pack(pady=5)
+        # 自動登入列 (修正顯示問題)
+        bypass_f = ttk.Frame(security_main_f)
+        bypass_f.pack(fill="x", pady=(10, 0))
+        
+        # 確保變數存在
+        if not hasattr(self, 'var_auto_login'):
+            self.var_auto_login = tk.BooleanVar()
+        
+        # 讀取目前狀態
+        try:
+            with open(AUTH_FILE, "r") as f:
+                curr_auth = json.load(f)
+                self.var_auto_login.set(curr_auth.get("remember", False))
+        except:
+            self.var_auto_login.set(False)
 
-        ttk.Button(ctrl_frame, text="➕ 新增/更新", command=self.action_add_custom_fee).pack(fill="x", pady=5)
-        ttk.Button(ctrl_frame, text="🗑️ 刪除選取", command=self.action_delete_custom_fee).pack(fill="x", pady=5)
-        ttk.Label(ctrl_frame, text="*修改後銷售頁面\n選單會同步更新", foreground="gray", font=("", 9)).pack(pady=10)
+        self.chk_auto_login = ttk.Checkbutton(bypass_f, text="啟動程式時自動登入 (Bypass Login)", 
+                                             variable=self.var_auto_login, command=self.toggle_auto_login)
+        self.chk_auto_login.pack(side="left")
+        ttk.Label(bypass_f, text="* 勾選後下次啟動將跳過登入視窗", foreground="gray", font=("", 9)).pack(side="left", padx=20)
 
-        field_cfg_frame = ttk.LabelFrame(main_frame, text="👁️ 商品資料欄位顯示設定 (勾選欲使用的功能)", padding=15)
-        field_cfg_frame.pack(fill="x", pady=10)
+        # --- 第四區：商品欄位顯示 ---
+        field_cfg_frame = ttk.LabelFrame(main_frame, text="👁️ 商品資料欄位顯示", padding=15)
+        field_cfg_frame.pack(fill="x", pady=5)
 
-        # 建立兩排勾選框
         row_f = ttk.Frame(field_cfg_frame)
         row_f.pack(fill="x")
 
-        for i, (label, var) in enumerate(self.show_fields.items()):
-            # 點擊勾選框時，即時觸發介面刷新
-            chk = ttk.Checkbutton(row_f, text=label, variable=var, 
-                                command=self.refresh_product_ui_layout)
-            chk.pack(side="left", padx=15, pady=5)
+        for label, var in self.show_fields.items():
+            ttk.Checkbutton(row_f, text=label, variable=var, 
+                            command=self.refresh_product_ui_layout).pack(side="left", padx=10)
 
-        ttk.Label(field_cfg_frame, text="* 隱藏欄位不會刪除資料，僅是在輸入與編輯介面中暫時收起。", 
-                foreground="gray", font=("", 9)).pack(anchor="w")
-
-        
-
-        # 載入初始費率資料
         self.refresh_fee_tree()
+
+
+    def update_system_auth(self):
+        new_u = self.var_new_user.get().strip()
+        new_p = self.var_new_pass.get().strip()
+
+        if len(new_u) < 4 or len(new_p) < 6:
+            messagebox.showwarning("警告", "帳號至少4位，密碼至少6位")
+            return
+
+        if messagebox.askyesno("確認", f"確定要將系統管理員變更為「{new_u}」嗎？\n請務必記住新密碼！"):
+            try:
+                auth_data = {
+                    "user": new_u,
+                    "pass": secure_hash(new_p) # 儲存雜湊值，而非明文
+                }
+                with open(AUTH_FILE, "w") as f:
+                    json.dump(auth_data, f)
+                
+                messagebox.showinfo("成功", "系統存取憑證已更新！\n下次啟動程式時請使用新帳密。")
+                self.var_new_user.set("")
+                self.var_new_pass.set("")
+            except Exception as e:
+                messagebox.showerror("失敗", f"更新失敗: {e}")
+
+
+    def toggle_auto_login(self):
+        """ 更新自動登入設定到檔案 """
+        try:
+            with open(AUTH_FILE, "r") as f:
+                data = json.load(f)
+            data["remember"] = self.var_auto_login.get()
+            with open(AUTH_FILE, "w") as f:
+                json.dump(data, f)
+            print(f"自動登入已設置為: {data['remember']}")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"無法儲存安全性設定: {e}")
+
+
 
     def refresh_fee_tree(self):
         """ 修正版：確保正確載入費率，並過濾掉非費率的系統設定 """
@@ -4866,7 +5048,9 @@ class SalesApp:
         except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
 
 
-if __name__ == "__main__":
+
+def start_main_app():
+    """ 這是原本啟動主程式的邏輯，包裝成一個 function """
     root = tk.Tk()
     style = ttk.Style()
     try:
@@ -4875,4 +5059,22 @@ if __name__ == "__main__":
         pass 
     app = SalesApp(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    # 1. 先顯示登入視窗
+    # 2. 傳入 start_main_app 作為成功後的執行動作
+    login = LoginWindow(start_main_app)
+    login.run()
+
+
+
+# if __name__ == "__main__":
+#     root = tk.Tk()
+#     style = ttk.Style()
+#     try:
+#         style.theme_use('vista') 
+#     except:
+#         pass 
+#     app = SalesApp(root)
+#     root.mainloop()
 
