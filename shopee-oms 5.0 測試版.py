@@ -1,4 +1,4 @@
-#shopee-oms 4.9 完整版
+#shopee-oms 5.0 完整版
 
 import json
 import sys
@@ -88,7 +88,8 @@ SHEET_SALES = '銷售紀錄'      # 歷史已完成訂單
 SHEET_TRACKING = '訂單追蹤'   # 未完成/出貨中 (緩衝區)
 SHEET_RETURNS = '退貨紀錄'    # 退貨區
 SHEET_PRODUCTS = '商品資料'
-SHEET_CONFIG = '系統設定'
+SHEET_FEES = '手續費設定'       # 原本的 '系統設定' 內容搬到這
+SHEET_SYS_SETTINGS = '系統設定'  # 專門存店名、版本、權限等
 
 
 
@@ -248,6 +249,8 @@ class LoginWindow:
     def __init__(self, on_success_callback):
         self.on_success = on_success_callback
         self.auth_data = self.load_auth_data()
+        self.skip_login = False
+
 
         if self.auth_data.get("remember", False):
             self.on_success()
@@ -257,6 +260,12 @@ class LoginWindow:
         self.root.title("ERP 系統登入")
         self.root.geometry("400x320") # 稍微加寬一點更美觀
         self.root.resizable(False, False)
+
+        try:
+            self.root.iconbitmap(resource_path("main.ico"))
+        except:
+            pass # 防止圖標遺失時程式崩潰
+
         
         # 讓整個內容區塊在視窗中垂直與水平置中
         main_container = ttk.Frame(self.root)
@@ -290,6 +299,15 @@ class LoginWindow:
         # 綁定 Enter
         self.root.bind('<Return>', lambda e: self.handle_login())
         self.root.mainloop()
+
+    def run(self):
+        if self.skip_login:
+            # 如果是自動登入，直接執行成功回呼 (進入主程式)
+            self.on_success()
+        else:
+            # 否則，開啟登入視窗進入循環
+            if hasattr(self, 'root'):
+                self.root.mainloop()
 
 
 
@@ -363,9 +381,14 @@ class SalesApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("蝦皮/網拍進銷存系統 (V4.0 完整版)")
+        self.root.title("蝦皮/網拍進銷存系統 (正式版)")
         self.root.geometry("1280x850") 
-        self.var_shop_name = tk.StringVar(value="商店") # 預設名稱
+        self.var_shop_name = tk.StringVar(value="商店名稱") # 預設名稱
+
+        try:
+            self.root.iconbitmap(resource_path("main.ico"))
+        except:
+            pass
 
 
           # 可選擇隱藏的欄位(不能隱藏): 商品名稱, 預設成本, 目前庫存
@@ -522,42 +545,39 @@ class SalesApp:
 
 
     def load_system_settings(self):
-        """ 從 Excel 載入永久保存的系統設定 """
+        """ 從獨立的『系統設定』分頁載入參數 """
         try:
             if os.path.exists(FILE_NAME):
-                df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-                # 尋找商家名稱設定
+                df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+                # 尋找商家名稱
                 shop_row = df_cfg[df_cfg['設定名稱'] == "SYSTEM_SHOP_NAME"]
                 if not shop_row.empty:
-                    # 我們將店名存在「費率百分比」這一欄（雖然欄名不符，但為了不更動 Excel 結構）
-                    # 或者妳可以檢查是否有『參數值』這一欄，若無則彈性處理
-                    saved_name = str(shop_row.iloc[0]['費率百分比'])
+                    saved_name = str(shop_row.iloc[0]['參數值']) # 這裡改讀『參數值』欄位
                     self.var_shop_name.set(saved_name)
         except Exception as e:
-            print(f"載入商家名稱失敗: {e}")
+            print(f"載入系統設定失敗: {e}")
 
 
     def save_system_settings(self):
-        """ 將商家名稱永久存入 Excel """
+        """ 儲存商家名稱至獨立分頁 """
         shop_name = self.var_shop_name.get().strip()
-        if not shop_name:
-            messagebox.showwarning("警告", "商家名稱不能為空")
-            return
+        if not shop_name: return
 
         try:
-            # 1. 讀取現有設定
-            df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-            
-            # 2. 更新或新增商家名稱列
+            # 讀取或建立新表
+            try:
+                df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+            except:
+                df_cfg = pd.DataFrame(columns=["設定名稱", "參數值"])
+
             if "SYSTEM_SHOP_NAME" in df_cfg['設定名稱'].values:
-                df_cfg.loc[df_cfg['設定名稱'] == "SYSTEM_SHOP_NAME", '費率百分比'] = shop_name
+                df_cfg.loc[df_cfg['設定名稱'] == "SYSTEM_SHOP_NAME", '參數值'] = shop_name
             else:
-                new_row = pd.DataFrame([["SYSTEM_SHOP_NAME", shop_name, 0]], columns=df_cfg.columns)
+                new_row = pd.DataFrame([["SYSTEM_SHOP_NAME", shop_name]], columns=["設定名稱", "參數值"])
                 df_cfg = pd.concat([df_cfg, new_row], ignore_index=True)
 
-            # 3. 使用萬用引擎存檔，保護其他分頁
-            if self._universal_save({SHEET_CONFIG: df_cfg}):
-                messagebox.showinfo("成功", "商家設定已永久保存！")
+            if self._universal_save({SHEET_SYS_SETTINGS: df_cfg}):
+                messagebox.showinfo("成功", "系統參數設定已存檔。")
         except Exception as e:
             messagebox.showerror("錯誤", f"儲存設定失敗: {e}")
 
@@ -582,7 +602,7 @@ class SalesApp:
                                  "商品名稱", "數量", "原始預計數量", "瑕疵數量", "進貨單價", 
                                  "進貨總額", "進項稅額", "分攤運費", "海關稅金", "賣家交付日期", "備註"],
 
-            SHEET_VENDORS: ["商店名", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
+            SHEET_VENDORS: ["廠商名稱", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
                             "平均前置天數", "總到貨率", "總合格率", "綜合評等分數", "星等", "最後更新"],
 
             SHEET_PRODUCTS: ["商品編號", "分類Tag", "商品名稱", "預設成本", "目前庫存", 
@@ -593,7 +613,9 @@ class SalesApp:
                             "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", 
                             "分攤手續費", "扣費項目", "總淨利", "毛利率", "稅額"],
 
-            SHEET_CONFIG: ["設定名稱", "費率百分比", "固定金額"]
+            SHEET_FEES: ["設定名稱", "費率百分比", "固定金額"],
+
+            SHEET_SYS_SETTINGS: ["設定名稱", "參數值"] # 改成 Key-Value 格式
         }
 
         updates_needed = {} # 記錄需要更新或建立的分頁
@@ -944,7 +966,7 @@ class SalesApp:
             df_v = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
             
             for _, row in df_v.iterrows():
-                name = str(row['商店名']).strip()
+                name = str(row['廠商名稱']).strip()
                 channel = str(row.get('通路', '')).strip()
                 if name == "nan" or name == "": continue
                 
@@ -1267,7 +1289,7 @@ class SalesApp:
 
 
     def setup_vendor_tab(self):
-        """ 建立進貨廠商管理介面 (擴充版) """
+        """ 建立進貨廠商管理介面 (UI 優化排版版) """
         paned = ttk.PanedWindow(self.tab_vendors, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -1275,12 +1297,14 @@ class SalesApp:
         left_f = ttk.LabelFrame(paned, text="🆕 廠商資料維護", padding=15)
         paned.add(left_f, weight=1)
 
-        # 使用 Grid 讓排版更專業
-        grid_opts = {'sticky': 'w', 'pady': 2}
-        e_opts = {'sticky': 'ew', 'pady': 2, 'padx': (5, 0)}
+        # 設定 Grid 權重，讓輸入框自動拉長
+        left_f.columnconfigure(1, weight=1)
+
+        grid_opts = {'sticky': 'w', 'pady': 8} # 增加垂直間距
+        e_opts = {'sticky': 'ew', 'pady': 8, 'padx': (10, 0)}
         
         curr = 0
-        ttk.Label(left_f, text="* 商店名稱:").grid(row=curr, column=0, **grid_opts)
+        ttk.Label(left_f, text="* 廠商名稱:").grid(row=curr, column=0, **grid_opts)
         ttk.Entry(left_f, textvariable=self.var_v_name).grid(row=curr, column=1, **e_opts)
         curr += 1
 
@@ -1308,36 +1332,57 @@ class SalesApp:
         ttk.Entry(left_f, textvariable=self.var_v_remarks).grid(row=curr, column=1, **e_opts)
         curr += 1
 
-        left_f.columnconfigure(1, weight=1) # 讓輸入框自動拉長
-
-        # 第一列：系統算的自動得分
+        # 績效評分區
         ttk.Label(left_f, text="系統績效評分:").grid(row=curr, column=0, **grid_opts)
-        ttk.Label(left_f, textvariable=self.var_v_system_score, font=("", 10, "bold"), foreground="blue").grid(row=curr, column=1, sticky="w", padx=5)
+        ttk.Label(left_f, textvariable=self.var_v_system_score, font=("", 10, "bold"), foreground="blue").grid(row=curr, column=1, sticky="w", padx=10)
         curr += 1
 
-        # 第二列：由妳輸入的印象分數
+        # 星等區
         ttk.Label(left_f, text="主觀印象星等:").grid(row=curr, column=0, **grid_opts)
-        self.combo_v_manual = ttk.Combobox(left_f, textvariable=self.var_v_manual_adj, values=["5","4","3","2","1"], width=5, state="readonly")
+        star_f = ttk.Frame(left_f)
+        star_f.grid(row=curr, column=1, sticky="w", padx=10)
+        
+        self.combo_v_manual = ttk.Combobox(star_f, textvariable=self.var_v_manual_adj, values=["5","4","3","2","1"], width=5, state="readonly")
+        self.combo_v_manual.pack(side="left")
         self.combo_v_manual.bind("<<ComboboxSelected>>", lambda e: self.refresh_vendor_live_score(self.var_v_name.get()))
-        self.combo_v_manual.grid(row=curr, column=1, sticky="w", padx=5)
-        ttk.Label(left_f, text="(針對溝通、包裝、售後態度打分)", foreground="gray", font=("", 9)).grid(row=curr, column=1, padx=(100, 0))
+        ttk.Label(star_f, text="(針對溝通、包裝、態度打分)", foreground="gray", font=("", 9)).pack(side="left", padx=10)
         curr += 1
 
-        btn_f = ttk.Frame(left_f)
-        btn_f.grid(row=curr, column=0, columnspan=2, pady=15)
-        ttk.Button(btn_f, text="💾 儲存廠商", command=self.submit_vendor).pack(side="left", padx=5)
-        ttk.Button(btn_f, text="🗑️ 刪除", command=self.delete_vendor).pack(side="left", padx=5)
+        # --- 底部按鈕區 (解決重疊關鍵) ---
+        # 1. 加上一點空白 Row 作為緩衝
+        ttk.Label(left_f, text="").grid(row=curr, column=0)
+        curr += 1
 
-        # --- 右側清單 (維持原本邏輯，但 bind 記得改) ---
+        # 2. 橫線分隔
+        ttk.Separator(left_f, orient="horizontal").grid(row=curr, column=0, columnspan=2, sticky="ew", pady=20)
+        curr += 1
+
+        # 3. 功能按鈕容器
+        btn_f = ttk.Frame(left_f)
+        btn_f.grid(row=curr, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_f, text="💾 儲存廠商資料", command=self.submit_vendor, width=15).pack(side="left", padx=10)
+        ttk.Button(btn_f, text="🗑️ 刪除", command=self.delete_vendor, width=10).pack(side="left", padx=10)
+        curr += 1
+
+        # 4. 批次匯入區
+        ttk.Button(left_f, text="📥 批次匯入廠商資料 (Excel)", command=self.open_vendor_import_wizard).grid(row=curr, column=0, columnspan=2, sticky="ew", padx=30, pady=10)
+
+        # --- 右側清單 ---
         right_f = ttk.LabelFrame(paned, text="🔍 廠商清單", padding=15)
         paned.add(right_f, weight=1)
 
         ent_search = ttk.Entry(right_f, textvariable=self.var_v_search)
-        ent_search.pack(fill="x", pady=(0, 5))
-        ent_search.bind('<KeyRelease>', lambda e: self.update_vendor_list()) # 修正後的元件 bind
+        ent_search.pack(fill="x", pady=(0, 10))
+        ent_search.bind('<KeyRelease>', lambda e: self.update_vendor_list())
 
-        self.list_vendors = tk.Listbox(right_f, font=("微軟正黑體", int(self.var_font_size.get())))
+        self.list_vendors = tk.Listbox(right_f, font=("微軟正黑體", int(self.var_font_size.get())), relief="flat", borderwidth=1)
         self.list_vendors.pack(fill="both", expand=True)
+        
+        # 加上滾動條讓清單專業點
+        sc_v = ttk.Scrollbar(self.list_vendors, orient="vertical", command=self.list_vendors.yview)
+        self.list_vendors.configure(yscrollcommand=sc_v.set)
+        sc_v.pack(side="right", fill="y")
+        
         self.list_vendors.bind('<<ListboxSelect>>', self.on_vendor_select)
 
         self.update_vendor_list()
@@ -1349,7 +1394,7 @@ class SalesApp:
         try:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
             for _, row in df.iterrows():
-                name = str(row['商店名'])
+                name = str(row['廠商名稱'])
                 channel = str(row.get('通路', ''))
                 if query in name.lower() or query in channel.lower():
                     self.list_vendors.insert(tk.END, f"{name} ({channel})")
@@ -1368,13 +1413,13 @@ class SalesApp:
             df_v = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
             df_v.columns = [str(c).strip() for c in df_v.columns]
             
-            row = df_v[df_v['商店名'].astype(str).str.strip() == v_name_selected].iloc[0]
+            row = df_v[df_v['廠商名稱'].astype(str).str.strip() == v_name_selected].iloc[0]
             
             def c(val, default=""):
                 if pd.isna(val) or str(val).lower() == "nan": return default
                 return str(val)
 
-            self.var_v_name.set(c(row['商店名']))
+            self.var_v_name.set(c(row['廠商名稱']))
             self.var_v_channel.set(c(row.get('通路', '')))
             self.var_v_taxid.set(c(row.get('統編', '')))
             self.var_v_contact.set(c(row.get('聯絡人', '')))
@@ -1470,7 +1515,7 @@ class SalesApp:
         channel = self.var_v_channel.get().strip() # 抓取通路
 
         if not name:
-            messagebox.showwarning("警告", "「商店名稱」為必填項目！")
+            messagebox.showwarning("警告", "「廠商名稱」為必填項目！")
             return
 
         try:
@@ -1480,7 +1525,7 @@ class SalesApp:
             except:
                 # 若讀取失敗，建立符合結構的空表
                 df = pd.DataFrame(columns=[
-                    "商店名", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
+                    "廠商名稱", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
                     "平均前置天數", "總到貨率", "總合格率", "綜合評等分數", "星等", "最後更新"
                 ])
 
@@ -1504,7 +1549,7 @@ class SalesApp:
             
             # 3. 建立要寫入的資料包
             new_entry = {
-                "商店名": name,
+                "廠商名稱": name,
                 "通路": channel if channel else "",  
                 "統編": self.var_v_taxid.get().strip(),
                 "聯絡人": self.var_v_contact.get().strip(),
@@ -1529,10 +1574,10 @@ class SalesApp:
                 df[col] = df[col].astype(object)
 
             # 5. 執行更新或新增
-            df['商店名_clean'] = df['商店名'].astype(str).str.strip()
+            df['廠商名稱_clean'] = df['廠商名稱'].astype(str).str.strip()
             
-            if name in df['商店名_clean'].values:
-                idx = df[df['商店名_clean'] == name].index[0]
+            if name in df['廠商名稱_clean'].values:
+                idx = df[df['廠商名稱_clean'] == name].index[0]
                 for key, val in new_entry.items():
                     if key in df.columns: # 確保欄位存在才寫入
                         df.at[idx, key] = val
@@ -1540,8 +1585,8 @@ class SalesApp:
                 df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
 
             # 移除臨時欄位
-            if '商店名_clean' in df.columns:
-                df = df.drop(columns=['商店名_clean'])
+            if '廠商名稱_clean' in df.columns:
+                df = df.drop(columns=['廠商名稱_clean'])
 
             # 6. 寫回前強制校準數值欄位
             numeric_cols = ["平均前置天數", "綜合評等分數", "星等"]
@@ -1565,12 +1610,40 @@ class SalesApp:
         if not name or not messagebox.askyesno("確認", f"確定刪除廠商 [{name}]？"): return
         try:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
-            df = df[df['商店名'] != name]
+            df = df[df['廠商名稱'] != name]
             if self._universal_save({SHEET_VENDORS: df}):
                 self.update_vendor_list()
                 self.update_pur_supplier_list()
                 self.var_v_name.set(""); self.var_v_channel.set("")
         except: pass
+
+
+    def open_vendor_import_wizard(self):
+        """ 開啟廠商匯入精靈 """
+        from VendorImportWizard import VendorImportWizard # 假設檔案名
+        VendorImportWizard(self.root, self.callback_vendor_import)
+
+    def callback_vendor_import(self, new_data_list):
+        """ 處理匯入後的廠商資料合併 """
+        try:
+            df_new = pd.DataFrame(new_data_list)
+            
+            # 讀取現有廠商
+            with pd.ExcelFile(FILE_NAME) as xls:
+                df_old = pd.read_excel(xls, sheet_name=SHEET_VENDORS)
+
+            # 合併，以「廠商名稱」為準去重
+            df_combined = pd.concat([df_old, df_new], ignore_index=True)
+            df_combined.drop_duplicates(subset=['廠商名稱'], keep='last', inplace=True)
+            
+            # 存檔
+            if self._universal_save({SHEET_VENDORS: df_combined}):
+                self.update_vendor_list()
+                return True
+            return False
+        except Exception as e:
+            messagebox.showerror("匯入失敗", f"錯誤: {e}")
+            return False
 
 
 
@@ -3514,65 +3587,32 @@ class SalesApp:
 
 
     def refresh_fee_tree(self):
-        """ 修正版：確保正確載入費率，並過濾掉非費率的系統設定 """
-        # 1. 清空舊有的表格顯示
+        """ 從『手續費設定』分頁載入，不再受系統參數干擾 """
         if hasattr(self, 'fee_tree'):
-            for i in self.fee_tree.get_children(): 
-                self.fee_tree.delete(i)
+            for i in self.fee_tree.get_children(): self.fee_tree.delete(i)
         
-        self.fee_lookup = {} # 重新初始化對照表
+        self.fee_lookup = {}
         fee_options = ["自訂手動輸入"]
 
         try:
             if not os.path.exists(FILE_NAME): return
-            
-            # 讀取系統設定分頁
-            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-            
-            # 移除全空的行
+            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_FEES)
             df = df.dropna(subset=['設定名稱'])
 
             for _, row in df.iterrows():
                 name = str(row['設定名稱']).strip()
+                perc = float(row['費率百分比'])
+                fixed = float(row.get('固定金額', 0))
                 
-                # --- [關鍵修正：跳過系統保留設定] ---
-                # 不把「商家名稱」顯示在費率下拉選單中
-                if name == "SYSTEM_SHOP_NAME": 
-                    continue
-                
-                try:
-                    # 確保費率和固定金額是數字
-                    perc = float(row['費率百分比'])
-                    fixed = float(row.get('固定金額', 0))
-                except (ValueError, TypeError):
-                    # 如果這行不是數字（例如是店名），就跳過
-                    continue
-                
-                # 2. 建立顯示文字
                 display_str = f"{name} ({perc}% + ${fixed})" if fixed > 0 else f"{name} ({perc}%)"
-                
-                # 3. 存入記憶體對照表 (Key 是顯示字串，Value 是數值元組)
                 self.fee_lookup[display_str] = (perc, fixed)
                 fee_options.append(display_str)
                 
-                # 更新設定頁面的表格清單
                 if hasattr(self, 'fee_tree'):
                     self.fee_tree.insert("", "end", values=(name, perc, fixed))
             
-            # 4. 更新銷售頁面的選單內容
             if hasattr(self, 'combo_fee_rate'):
                 self.combo_fee_rate['values'] = fee_options
-                
-                # 5. --- [核心修正：強制設定預設值] ---
-                if len(fee_options) > 1:
-                    # 選取第一個從 Excel 讀到的正式費率
-                    self.combo_fee_rate.set(fee_options[1])
-                else:
-                    self.combo_fee_rate.set("自訂手動輸入")
-                
-                # 6. 立即觸發一次總額計算，讓介面數字跳動
-                self.update_totals()
-                
         except Exception as e:
             print(f"費率載入錯誤: {e}")
 
@@ -3598,7 +3638,7 @@ class SalesApp:
             # 2. 嘗試讀取現有的 Excel 設定
             if os.path.exists(FILE_NAME):
                 try:
-                    df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                    df = pd.read_excel(FILE_NAME, sheet_name=SHEET_FEES)
                     
                     # 檢查並補齊缺失欄位 (防止舊版 Excel 報錯)
                     for col in target_cols:
@@ -3630,7 +3670,7 @@ class SalesApp:
 
             # 4. 調用全能存檔引擎 (我們剛剛統一過的函式)
             # 注意：這裡呼叫的是 _universal_save，它會保護其他所有分頁
-            save_success = self._universal_save({SHEET_CONFIG: df})
+            save_success = self._universal_save({SHEET_FEES: df})
             
             if save_success:
                 # 5. 刷新介面
@@ -3670,13 +3710,13 @@ class SalesApp:
         if confirm:
             try:
                 # 讀取現有設定
-                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_FEES)
                 
                 # 執行過濾：只留下名稱不等於要刪除項目的資料
                 df = df[df['設定名稱'].astype(str).str.strip() != str(fee_name).strip()]
                 
                 # 使用萬用存檔引擎儲存
-                if self._universal_save({SHEET_CONFIG: df}):
+                if self._universal_save({SHEET_FEES: df}):
                     messagebox.showinfo("成功", f"費率項目「{fee_name}」已成功移除。")
                     # 重新整理介面清單
                     self.refresh_fee_tree()
@@ -3684,25 +3724,23 @@ class SalesApp:
                 messagebox.showerror("錯誤", f"刪除費率失敗: {e}")
 
     def _save_config_to_excel(self, df_config):
-        """ 專門儲存設定分頁的輔助函式 (強化安全版) """
+        """ 專門儲存『手續費設定』分頁的輔助函式 (對接萬用引擎) """
+        # 原本這裡手寫了一大堆讀取與寫入邏輯，現在統一交給萬用引擎處理
+        # SHEET_FEES 對應您之前定義的 '手續費設定'
+        
         try:
-            # 1. 先讀取目前 Excel 裡所有的分頁，確保等等寫入時不會弄丟
-            with pd.ExcelFile(FILE_NAME) as xls:
-                sheet_names = xls.sheet_names
-                all_data = {sn: pd.read_excel(xls, sheet_name=sn) for sn in sheet_names}
+            # 呼叫萬用引擎，傳入字典格式
+            success = self._universal_save({SHEET_FEES: df_config})
             
-            # 2. 將我們要更新的「系統設定」放進資料字典中
-            all_data[SHEET_CONFIG] = df_config
-
-            # 3. 一次性全部寫回 Excel
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                for sn, df in all_data.items():
-                    df.to_excel(writer, sheet_name=sn, index=False)
-                    
-        except PermissionError:
-            messagebox.showerror("錯誤", "Excel 檔案被開啟中，請先關閉 Excel 再按儲存！")
+            if success:
+                # 更新成功後，重新整理 UI 下拉選單與表格
+                self.refresh_fee_tree()
+                print("手續費設定儲存成功。")
+            else:
+                # 失敗時 (例如 Excel 沒關)，_universal_save 內部已經會跳出 messagebox 提示
+                print("手續費設定儲存失敗。")
         except Exception as e:
-            messagebox.showerror("錯誤", f"存檔過程出錯: {str(e)}")
+            messagebox.showerror("錯誤", f"儲存過程出錯: {str(e)}")
 
 
     def setup_about_us_tab(self):
@@ -4014,8 +4052,8 @@ class SalesApp:
             elif final_score >= 60: star = 2
 
             # 2. 更新回廠商分頁
-            if vendor_name in df_v['商店名'].astype(str).str.strip().values:
-                idx = df_v[df_v['商店名'].astype(str).str.strip() == vendor_name].index[0]
+            if vendor_name in df_v['廠商名稱'].astype(str).str.strip().values:
+                idx = df_v[df_v['廠商名稱'].astype(str).str.strip() == vendor_name].index[0]
                 
                 # 強制轉為數值型態後再賦值
                 df_v.at[idx, '平均前置天數'] = float(avg_lead_time)
@@ -4126,7 +4164,7 @@ class SalesApp:
 
 
     def submit_purchase(self):
-        """ 提交進貨：更新庫存、更新成本、記錄進貨單 """
+        """ 提交進貨：更新庫存、更新成本、記錄進貨單 (V4.7 萬用引擎版) """
         name = self.var_pur_name.get().strip()
         qty = self.var_pur_qty.get()
         cost = self.var_pur_cost.get()
@@ -4142,30 +4180,27 @@ class SalesApp:
         pur_id = "I" + datetime.now().strftime("%Y%m%d%H%M%S")
 
         try:
-            # 1. 讀取所有分頁
+            # 1. 讀取需要更動的分頁
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
                 df_pur = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
-                # 讀取其他分頁以防遺失
-                df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
-                df_track = pd.read_excel(xls, sheet_name=SHEET_TRACKING)
-                df_ret = pd.read_excel(xls, sheet_name=SHEET_RETURNS)
-                df_cfg = pd.read_excel(xls, sheet_name=SHEET_CONFIG)
 
-            # 2. 更新商品庫存與成本
+            # 2. 更新商品庫存與成本 (WAC 邏輯)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             if name in df_prods['商品名稱'].values:
                 idx = df_prods[df_prods['商品名稱'] == name].index[0]
+                
+                # 更新數據
                 df_prods.at[idx, '目前庫存'] += qty
-                df_prods.at[idx, '預設成本'] = cost # 進貨價格自動更新成本
+                df_prods.at[idx, '預設成本'] = cost 
                 df_prods.at[idx, '最後更新時間'] = now_str
                 df_prods.at[idx, '最後進貨時間'] = now_str
             else:
                 messagebox.showerror("錯誤", f"找不到商品「{name}」，請先到商品管理新增。")
                 return
 
-            # 3. 建立進貨紀錄
-            new_pur = pd.DataFrame([{
+            # 3. 建立進貨紀錄 DataFrame
+            new_pur_row = pd.DataFrame([{
                 "進貨單號": f"'{pur_id}", # 強制字串
                 "進貨日期": date_str,
                 "供應商": supplier,
@@ -4174,29 +4209,33 @@ class SalesApp:
                 "數量": qty,
                 "進貨單價": cost,
                 "進貨總額": qty * cost,
-                "備註": ""
+                "備註": "直接入庫"
             }])
-            df_pur = pd.concat([df_pur, new_pur], ignore_index=True)
+            df_pur = pd.concat([df_pur, new_pur_row], ignore_index=True)
 
-            # 4. 一次性寫回
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                df_prods.to_excel(writer, sheet_name=SHEET_PRODUCTS, index=False)
-                df_pur.to_excel(writer, sheet_name=SHEET_PURCHASES, index=False)
-                df_sales.to_excel(writer, sheet_name=SHEET_SALES, index=False)
-                df_track.to_excel(writer, sheet_name=SHEET_TRACKING, index=False)
-                df_ret.to_excel(writer, sheet_name=SHEET_RETURNS, index=False)
-                df_cfg.to_excel(writer, sheet_name=SHEET_CONFIG, index=False)
+            # 4. 【核心改變】：呼叫萬用引擎一次性寫回所有變動
+            # 這裡我們傳入一個字典，包含這次要更新的兩個 DataFrame
+            # 引擎會自動保護 SHEET_FEES, SHEET_SYS_SETTINGS 等其他所有分頁
+            save_dict = {
+                SHEET_PRODUCTS: df_prods,
+                SHEET_PURCHASES: df_pur
+            }
 
-            messagebox.showinfo("成功", f"進貨單 {pur_id} 已入庫！\n庫存已自動增加 {qty}。")
-            
-            # 清除輸入並刷新
-            self.var_pur_qty.set(1); self.var_pur_cost.set(0.0); self.var_pur_logistics.set("")
-            self.load_purchase_data()
-            self.products_df = df_prods # 同步介面數據
-            self.update_sales_prod_list() # 更新銷售頁面庫存顯示
+            if self._universal_save(save_dict):
+                messagebox.showinfo("成功", f"進貨單 {pur_id} 已入庫！\n庫存已自動增加 {qty}。")
+                
+                # 清除輸入並刷新介面
+                self.var_pur_qty.set(1)
+                self.var_pur_cost.set(0.0)
+                self.var_pur_logistics.set("")
+                self.load_purchase_data()
+                self.products_df = df_prods 
+                self.update_sales_prod_list() 
             
         except Exception as e:
-            messagebox.showerror("錯誤", f"進貨作業失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("錯誤", f"進貨作業失敗: {str(e)}")
 
     def load_purchase_data(self):
         """ 載入最近進貨清單 """
@@ -4514,7 +4553,7 @@ class SalesApp:
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
                 standard_order = [
                     SHEET_PRODUCTS, SHEET_SALES, SHEET_TRACKING, 
-                    SHEET_PURCHASES, SHEET_PUR_TRACKING, SHEET_RETURNS, SHEET_CONFIG
+                    SHEET_PURCHASES, SHEET_PUR_TRACKING, SHEET_RETURNS, SHEET_FEES, SHEET_SYS_SETTINGS
                 ]
                 
                 # 先依序寫入定義好的標準分頁
