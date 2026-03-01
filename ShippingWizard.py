@@ -1,15 +1,30 @@
 #出貨單生成插件
 
 import os
+import sys
 import webbrowser
 from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import ttk
-import shutil # 用於檔案操作
+import shutil
+
+from main import resource_path # 用於檔案操作
 
 # --- 設定區 ---
 TEMP_FOLDER = "temp_print_files" # 存放出貨單的資料夾
 EXPIRE_DAYS = 3                  # 檔案保留天數，超過則自動刪除
+
+
+def resource_path(relative_path):
+    """ 獲取資源的絕對路徑 (打包用) """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+
 
 def manage_temp_folder():
     """ 檢查資料夾是否存在，並清理舊檔案 """
@@ -48,6 +63,12 @@ def show_shipping_dialog(parent, order_info, items_data):
     size_var = tk.StringVar(value="A4")
     ttk.Radiobutton(dialog, text="A4 標準報表 (每頁12項)", variable=size_var, value="A4").pack(pady=5, anchor="w", padx=60)
     ttk.Radiobutton(dialog, text="10x15cm 標籤 (每頁8項)", variable=size_var, value="Label").pack(pady=5, anchor="w", padx=60)
+
+    try:
+        dialog.iconbitmap(resource_path("main.ico"))
+    except:
+        pass
+        
 
     def on_confirm():
         generate_shipping_html(order_info, items_data, size_var.get())
@@ -174,5 +195,4 @@ def generate_shipping_html(info, items, size_choice):
         f.write(html_content)
     
     # 開啟該路徑
-
     webbrowser.open(os.path.abspath(file_full_path))
