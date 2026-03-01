@@ -2,19 +2,39 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
 from datetime import datetime
+import sys
+import os
 
+# 嘗試匯入專業表格套件
 try:
     from tksheet import Sheet
 except ImportError:
     Sheet = None
 
+
+def resource_path(relative_path):
+    """ 獲取資源的絕對路徑 (打包用) """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
 class ImportWizard(tk.Toplevel):
     def __init__(self, parent, save_callback):
         super().__init__(parent)
-        self.title("🚀 商品資料批次匯入精靈 (經典表格版)")
+        self.title("商品資料批次匯入精靈(excel表格版)")
         self.geometry("1200x850")
         self.save_callback = save_callback 
         self.import_raw_df = pd.DataFrame()
+
+        try:
+            self.iconbitmap(resource_path("main.ico"))
+        except:
+            pass
+
+        
         
         # ERP 核心必填欄位
         self.REQUIRED_FIELDS = ["商品名稱", "目前庫存", "預設成本"]
