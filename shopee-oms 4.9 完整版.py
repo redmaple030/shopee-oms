@@ -1,4 +1,4 @@
-#shopee-oms 4.8 完整版
+#shopee-oms 4.9 完整版
 
 import json
 import sys
@@ -2356,6 +2356,10 @@ class SalesApp:
         self.combo_fee_rate.pack(side="left", padx=5)
         self.combo_fee_rate.bind('<<ComboboxSelected>>', self.on_fee_option_selected)
 
+        # [新增這行]：讓使用者手動輸入數字時，也能即時觸發計算
+        self.combo_fee_rate.bind('<KeyRelease>', self.update_totals_event)
+
+
         # 第二排：物流運費 (新增)
         f_ship = ttk.Frame(fee_frame)
         f_ship.pack(fill="x", pady=5)
@@ -3375,22 +3379,53 @@ class SalesApp:
 
         # --- 第二區：自訂費率管理 ---
         fee_mgmt_frame = ttk.LabelFrame(main_frame, text="💰 銷售費率管理", padding=15)
-        fee_mgmt_frame.pack(fill="x", pady=8) # 改為 fill="x" 節省空間
+        fee_mgmt_frame.pack(fill="x", pady=8)
 
-        fee_content = ttk.Frame(fee_mgmt_frame)
-        fee_content.pack(fill="x")
+        # 1. 上排：輸入與操作按鈕 (全部橫向排列)
+        input_f = ttk.Frame(fee_mgmt_frame)
+        input_f.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(input_f, text="名稱:").pack(side="left")
+        self.ent_fee_name = ttk.Entry(input_f, width=12)
+        self.ent_fee_name.pack(side="left", padx=5)
+
+        ttk.Label(input_f, text="費率(%):").pack(side="left", padx=5)
+        self.ent_fee_val = ttk.Entry(input_f, width=8)
+        self.ent_fee_val.pack(side="left", padx=5)
+
+        ttk.Label(input_f, text="固定金額($):").pack(side="left", padx=5)
+        self.ent_fee_fixed = ttk.Entry(input_f, width=8)
+        self.ent_fee_fixed.insert(0, "0")
+        self.ent_fee_fixed.pack(side="left", padx=5)
+
+        # --- 按鈕群組 ---
+        ttk.Button(input_f, text="➕ 新增/更新", 
+                   command=self.action_add_custom_fee).pack(side="left", padx=10)
         
-        self.fee_tree = ttk.Treeview(fee_content, columns=("名稱", "百分比", "固定"), show='headings', height=4)
-        self.fee_tree.heading("名稱", text="名稱")
-        self.fee_tree.heading("百分比", text="費率%")
-        self.fee_tree.heading("固定", text="固定$")
-        self.fee_tree.column("名稱", width=100); self.fee_tree.column("百分比", width=60); self.fee_tree.column("固定", width=60)
-        self.fee_tree.pack(side="left", fill="x", expand=True)
+        # [關鍵修正]：刪除按鈕現在緊跟在新增按鈕右側
+        ttk.Button(input_f, text="🗑️刪除", 
+                   command=self.action_delete_custom_fee).pack(side="left", padx=2)
 
-        ctrl_f = ttk.Frame(fee_content, padding=(10, 0))
-        ctrl_f.pack(side="right")
-        ttk.Button(ctrl_f, text="➕ 新增", command=self.action_add_custom_fee, width=8).pack(pady=2)
-        ttk.Button(ctrl_f, text="🗑️ 刪除", command=self.action_delete_custom_fee, width=8).pack(pady=2)
+        # 2. 下排：列表區域 (Treeview)
+        list_f = ttk.Frame(fee_mgmt_frame)
+        list_f.pack(fill="x")
+        
+        self.fee_tree = ttk.Treeview(list_f, columns=("名稱", "百分比", "固定"), show='headings', height=4)
+        self.fee_tree.heading("名稱", text="費率名稱")
+        self.fee_tree.heading("百分比", text="百分比 (%)")
+        self.fee_tree.heading("固定", text="固定金額 ($)")
+        self.fee_tree.column("名稱", width=150)
+        self.fee_tree.column("百分比", width=80, anchor="center")
+        self.fee_tree.column("固定", width=80, anchor="center")
+        
+        sc_fee = ttk.Scrollbar(list_f, orient="vertical", command=self.fee_tree.yview)
+        self.fee_tree.configure(yscrollcommand=sc_fee.set)
+        
+        self.fee_tree.pack(side="left", fill="x", expand=True)
+        sc_fee.pack(side="left", fill="y")
+
+
+
 
         # --- 第三區：安全性與帳密 (整合在一起節省高度) ---
         security_main_f = ttk.LabelFrame(main_frame, text="🛡️ 安全性與存取控制", padding=15)
@@ -3614,16 +3649,39 @@ class SalesApp:
             messagebox.showerror("儲存失敗", f"發生非預期錯誤: {str(e)}")
 
     def action_delete_custom_fee(self):
+        """ 刪除選取費率：增加二次確認視窗 """
+        # 1. 檢查是否有選中項目
         sel = self.fee_tree.selection()
-        if not sel: return
-        name = self.fee_tree.item(sel[0])['values'][0]
+        if not sel:
+            messagebox.showwarning("提示", "請先點選清單中要刪除的費率項目。")
+            return
         
-        try:
-            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
-            df = df[df['設定名稱'] != name]
-            self._save_config_to_excel(df)
-            self.refresh_fee_tree()
-        except Exception as e: messagebox.showerror("錯誤", str(e))
+        # 2. 取得選中項目的名稱
+        item_data = self.fee_tree.item(sel[0])
+        fee_name = item_data['values'][0] # 取得第一欄「費率名稱」
+
+        # 3. 彈出二次確認視窗 (關鍵新增)
+        confirm = messagebox.askyesno(
+            "⚠️ 確認刪除", 
+            f"您確定要刪除費率項目「{fee_name}」嗎？\n\n注意：刪除後，「銷售輸入」頁面的下拉選單將不再出現此選項。"
+        )
+
+        # 4. 如果使用者點選「是」(True)，則執行刪除
+        if confirm:
+            try:
+                # 讀取現有設定
+                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_CONFIG)
+                
+                # 執行過濾：只留下名稱不等於要刪除項目的資料
+                df = df[df['設定名稱'].astype(str).str.strip() != str(fee_name).strip()]
+                
+                # 使用萬用存檔引擎儲存
+                if self._universal_save({SHEET_CONFIG: df}):
+                    messagebox.showinfo("成功", f"費率項目「{fee_name}」已成功移除。")
+                    # 重新整理介面清單
+                    self.refresh_fee_tree()
+            except Exception as e:
+                messagebox.showerror("錯誤", f"刪除費率失敗: {e}")
 
     def _save_config_to_excel(self, df_config):
         """ 專門儲存設定分頁的輔助函式 (強化安全版) """
@@ -4622,10 +4680,18 @@ class SalesApp:
         self.update_totals()
 
     def on_fee_option_selected(self, event):
-        selected_text = self.combo_fee_rate.get()
-        match = re.search(r"\((\d+\.?\d*)%\)", selected_text)
-        if match: self.update_totals()
-        elif "自訂" in selected_text: self.combo_fee_rate.set("") 
+        """ 當選擇費率選項時的處理邏輯 """
+        selected_text = self.var_fee_rate_str.get()
+        
+        if "自訂" in selected_text:
+            # 切換為可輸入模式
+            self.combo_fee_rate.config(state="normal")
+            self.var_fee_rate_str.set("")  # 清空文字讓使用者輸入
+            self.combo_fee_rate.focus()    # 自動聚焦
+        else:
+            # 切換回唯讀模式 (針對從 Excel 讀取的固定費率)
+            self.combo_fee_rate.config(state="readonly")
+        
         self.update_totals()
 
 
@@ -4638,46 +4704,43 @@ class SalesApp:
             t_sales = sum(i['total_sales'] for i in self.cart_data)
             t_cost = sum(i['total_cost'] for i in self.cart_data)
             
-            # --- [保持原本的費率對照表邏輯，不變動] ---
-            selection = self.var_fee_rate_str.get()
+            # --- [優化後的費率解析邏輯] ---
+            selection = self.var_fee_rate_str.get().strip()
             rate = 0.0
             fixed_fee = 0.0
+
+            # A. 檢查是否為預設的 Excel 選項
             if selection in self.fee_lookup:
                 rate, fixed_fee = self.fee_lookup[selection]
             else:
+                # B. 若非預設選項，嘗試解析使用者輸入的數字
                 try:
-                    rate = float(selection.replace("%", ""))
-                except:
+                    # 去除 % 符號並轉為浮點數
+                    clean_input = selection.replace("%", "")
+                    if clean_input:
+                        rate = float(clean_input)
+                except ValueError:
                     rate = 0.0
-
             # ---------------------------------------
 
-            # 2. 獲取新增的 運費 與 扣費(折扣)
-            try: 
-                ship_fee = float(self.var_ship_fee.get())  # 賣家負擔的運費
-            except: 
-                ship_fee = 0.0
-
-            try: 
-                extra_deduct = float(self.var_extra_fee.get()) # 折扣或額外扣費
-            except: 
-                extra_deduct = 0.0
+            # 2. 獲取運費與折扣
+            try: ship_fee = float(self.var_ship_fee.get())
+            except: ship_fee = 0.0
+            try: extra_deduct = float(self.var_extra_fee.get())
+            except: extra_deduct = 0.0
 
             payer = self.var_ship_payer.get()
             
             # 3. 計算各項支出
-             # 1. 平台手續費 (只算商品的抽成)
-            platform_fee = (t_sales * (rate/100)) + fixed_fee
+            # 平台手續費計算：(總銷售額 * (百分比/100)) + 固定金額
+            platform_fee = (t_sales * (rate / 100)) + fixed_fee
             
-            # 2. 利潤計算 (不論誰付，只要是「賣家付」，淨利就要扣掉這筆成本)
-            # 淨利 = 商品總價 - 成本 - 平台費 - 折扣 - (如果是賣家付則扣除運費)
+            # 計算淨利
             profit = t_sales - t_cost - platform_fee - extra_deduct
             if payer == "賣家付":
                 profit -= ship_fee
             
-            # 3. 預估入帳 (你從平台或買家手中拿到的錢)
-            # 如果買家付運費，且該運費是「代收」性質（如賣貨便、賣家宅配）：
-            # 你會拿到：商品錢 + 運費 - 平台費 - 折扣
+            # 計算撥款總額
             if payer == "買家付":
                 income = t_sales + ship_fee - platform_fee - extra_deduct
             else:
@@ -4685,8 +4748,7 @@ class SalesApp:
 
             # --- 更新 UI ---
             self.lbl_gross.config(text=f"商品小計: ${t_sales:,.0f}")
-            payer_color = "red" if payer == "賣家付" else "black"
-            self.lbl_fee.config(text=f"手續費: -${platform_fee:,.0f} | 運費({payer}): ${ship_fee:,.0f} | 折扣: -${extra_deduct:,.0f}")
+            self.lbl_fee.config(text=f"手續費({rate}%): -${platform_fee:,.1f} | 運費: ${ship_fee:,.0f} | 折扣: -${extra_deduct:,.0f}")
             self.lbl_income.config(text=f"實收/撥款總額: ${income:,.1f}")
             self.lbl_profit.config(text=f"本單純利: ${profit:,.1f}", foreground="green" if profit > 0 else "red")
 
@@ -5077,5 +5139,4 @@ if __name__ == "__main__":
 #         pass 
 #     app = SalesApp(root)
 #     root.mainloop()
-
 
