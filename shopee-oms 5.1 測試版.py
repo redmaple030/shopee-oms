@@ -209,9 +209,10 @@ class GoogleDriveSync:
                     except Exception as delete_error:
                         print(f"system: failed to delete old file: {delete_error}")
 
-            return True, f"system: backup successful!\nCloud filename: {file_name}\n(System has automatically retained the latest 20 records)"
+            return True, f"系統備份成功\n 雲端檔案: {file_name}\n(系統已自動管理備份數量(最多保留20筆))"
         except Exception as e:
             return False, f"system: failed to upload file: {str(e)}"
+
 
     def list_backups(self):
         """列出備份資料夾內的檔案"""
@@ -5451,5 +5452,6 @@ if __name__ == "__main__":
 #         pass 
 #     app = SalesApp(root)
 #     root.mainloop()
+
 
 
