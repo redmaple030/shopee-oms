@@ -1,4 +1,4 @@
-#shopee-oms 5.0 完整版
+#shopee-oms 5.1 完整版
 
 import json
 import sys
@@ -13,6 +13,8 @@ import threading
 import hashlib
 from ImportWizard import ImportWizard
 from ShippingWizard import show_shipping_dialog
+from decimal import Decimal, ROUND_HALF_UP
+
 
 
 
@@ -116,6 +118,8 @@ SHIPPING_METHODS = [
     "蝦皮店到店-隔日到貨", "蝦皮店到宅",
     "黑貓宅急便", "新竹物流", "郵局掛號", "賣家宅配", "面交/自取"
 ]
+
+
 
 
 class GoogleDriveSync:
@@ -376,8 +380,8 @@ class LoginWindow:
             messagebox.showerror("錯誤", "帳號或密碼無效！")
 
 
-class SalesApp:
 
+class SalesApp:
     
     def __init__(self, root):
         self.root = root
@@ -441,6 +445,22 @@ class SalesApp:
         self.var_v_leadtime = tk.StringVar(value="--") # 這是顯示用的，不可改
         self.var_pur_v_search = tk.StringVar()  # 進貨頁面的廠商搜尋框
         self.var_pur_supplier = tk.StringVar()  # 進貨頁面的目前選定廠商
+
+        #--- [新增：廠商評估 KPI 參數變數] ---
+        # 權重類 (加總應為 1.0)
+        self.var_w_quality = tk.DoubleVar(value=0.4)   # 品質合格率權重
+        self.var_w_prep = tk.DoubleVar(value=0.3)      # 備貨時效權重
+        self.var_w_fulfill = tk.DoubleVar(value=0.2)   # 到貨滿足率權重
+        self.var_w_transit = tk.DoubleVar(value=0.1)   # 運輸時效權重
+        
+        # 標準類 (罰分基準天數)
+        self.var_std_prep = tk.IntVar(value=3)         # 備貨超過幾天開始扣分
+        self.var_std_transit = tk.IntVar(value=5)      # 運輸超過幾天開始扣分
+        
+        # 混合比例 (系統分佔比，剩餘為人為星等佔比)
+        self.var_w_system_ratio = tk.DoubleVar(value=0.8)
+
+
         self.var_v_system_score = tk.StringVar(value="0")  # 系統算的總分 (0-100)
         self.var_v_manual_adj = tk.StringVar(value="5")    # 人為給的印象分數 (1-5星)
 
@@ -492,7 +512,13 @@ class SalesApp:
         self.var_sel_sku = tk.StringVar() # 用於暫存銷售頁面選中商品的編號
 
       
-    
+    # 處理十進制運算
+    def dec_round(self, value, places=2):
+            """ 將數值轉換為 Decimal 並精確四捨五入到指定位數 """
+            # 使用 str(value) 轉換是為了防止從 float 直接轉入時帶入舊的誤差
+            d = Decimal(str(value))
+            return d.quantize(Decimal(f"1.{'0'*places}"), rounding=ROUND_HALF_UP)
+
    
 
     def setup_fonts(self, size):
@@ -544,18 +570,31 @@ class SalesApp:
             print(f"字體調整失敗: {e}")
 
 
+
     def load_system_settings(self):
-        """ 從獨立的『系統設定』分頁載入參數 """
+        """ 強化版：載入店名與所有評估參數 """
         try:
-            if os.path.exists(FILE_NAME):
-                df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
-                # 尋找商家名稱
-                shop_row = df_cfg[df_cfg['設定名稱'] == "SYSTEM_SHOP_NAME"]
-                if not shop_row.empty:
-                    saved_name = str(shop_row.iloc[0]['參數值']) # 這裡改讀『參數值』欄位
-                    self.var_shop_name.set(saved_name)
+            if not os.path.exists(FILE_NAME): return
+            df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+            
+            # 建立對照字典
+            settings = dict(zip(df_cfg['設定名稱'], df_cfg['參數值']))
+            
+            # 1. 載入店名
+            if "SYSTEM_SHOP_NAME" in settings:
+                self.var_shop_name.set(settings["SYSTEM_SHOP_NAME"])
+            
+            # 2. 載入 KPI 參數 (若不存在則維持 __init__ 的預設值)
+            if "VENDOR_W_QUALITY" in settings: self.var_w_quality.set(float(settings["VENDOR_W_QUALITY"]))
+            if "VENDOR_W_PREP" in settings: self.var_w_prep.set(float(settings["VENDOR_W_PREP"]))
+            if "VENDOR_W_FULFILL" in settings: self.var_w_fulfill.set(float(settings["VENDOR_W_FULFILL"]))
+            if "VENDOR_W_TRANSIT" in settings: self.var_w_transit.set(float(settings["VENDOR_W_TRANSIT"]))
+            if "VENDOR_STD_PREP" in settings: self.var_std_prep.set(int(settings["VENDOR_STD_PREP"]))
+            if "VENDOR_STD_TRANSIT" in settings: self.var_std_transit.set(int(settings["VENDOR_STD_TRANSIT"]))
+            if "VENDOR_W_SYSTEM_RATIO" in settings: self.var_w_system_ratio.set(float(settings["VENDOR_W_SYSTEM_RATIO"]))
+
         except Exception as e:
-            print(f"載入系統設定失敗: {e}")
+            print(f"載入設定失敗: {e}")
 
 
     def save_system_settings(self):
@@ -853,7 +892,7 @@ class SalesApp:
 
 
     def add_to_pur_cart_batch(self):
-        """ 方案 3：讀取 Listbox 中所有被反白的商品，批量預加 """
+        """ 方案 3:讀取 Listbox 中所有被反白的商品，批量預加 """
         selections = self.list_pur_prod.curselection()
         if not selections:
             messagebox.showwarning("提示", "請先點選左側清單中的商品 (可搭配 Ctrl 多選)")
@@ -868,18 +907,33 @@ class SalesApp:
             record = self.products_df[self.products_df['商品名稱'] == p_name]
             default_cost = record.iloc[0]['預設成本'] if not record.empty else 0.0
             
-            # 建立預設資料 (數量 1)
-            tax = round(default_cost * 0.05, 2) if self.var_pur_tax_enabled.get() else 0.0
-            total = default_cost # 因為數量是 1
+            # --- [Decimal 精確計算區] ---
+            # 數量預設 1
+            d_qty = Decimal("1")
+            d_cost = Decimal(str(default_cost))
+            
+            # 計算總額 (取 2 位)
+            total_val = self.dec_round(d_qty * d_cost)
+            
+            # 計算稅額 (5%)
+            if self.var_pur_tax_enabled.get():
+                tax_val = self.dec_round(total_val * Decimal("0.05"))
+            else:
+                tax_val = Decimal("0.00")
 
+            # 存入記憶體 (轉回 float 供後續 Excel 寫入相容)
             self.pur_cart_data.append({
-                "name": p_name, "qty": 1, "cost": default_cost, "tax": tax, "total": total
+                "name": p_name, 
+                "qty": 1, 
+                "cost": float(d_cost), 
+                "tax": float(tax_val), 
+                "total": float(total_val)
             })
-            self.tree_pur_cart.insert("", "end", values=(p_name, 1, default_cost, tax, total))
+            
+            # 寫入介面 Treeview
+            self.tree_pur_cart.insert("", "end", values=(p_name, 1, float(d_cost), float(tax_val), float(total_val)))
 
         self.update_pur_cart_total()
-        
-        # 優化體驗：搜尋框自動反白，方便直接搜尋下一組
         self.ent_pur_search.focus_set()
         self.ent_pur_search.selection_range(0, tk.END)
 
@@ -912,17 +966,36 @@ class SalesApp:
 
         def confirm_edit(e=None):
             try:
-                new_q = int(ent_qty.get())
-                new_c = float(ent_cost.get())
-                new_total = new_q * new_c
-                new_tax = round(new_total * 0.05, 2) if self.var_pur_tax_enabled.get() else 0.0
+                # --- [Decimal 精確修正] ---
+                d_qty = Decimal(str(ent_qty.get()))
+                d_cost = Decimal(str(ent_cost.get()))
                 
-                # 更新記憶體與介面
-                self.pur_cart_data[idx].update({"qty": new_q, "cost": new_c, "tax": new_tax, "total": new_total})
-                self.tree_pur_cart.item(item_id, values=(current['name'], new_q, new_c, new_tax, new_total))
+                # 計算新總額
+                new_total = self.dec_round(d_qty * d_cost)
+                
+                # 計算新稅額
+                if self.var_pur_tax_enabled.get():
+                    new_tax = self.dec_round(new_total * Decimal("0.05"))
+                else:
+                    new_tax = Decimal("0.00")
+                
+                # 更新記憶體數據
+                self.pur_cart_data[idx].update({
+                    "qty": int(d_qty), 
+                    "cost": float(d_cost), 
+                    "tax": float(new_tax), 
+                    "total": float(new_total)
+                })
+                
+                # 更新 Treeview 顯示
+                self.tree_pur_cart.item(item_id, values=(
+                    current['name'], int(d_qty), float(d_cost), float(new_tax), float(new_total)
+                ))
+                
                 self.update_pur_cart_total()
                 win.destroy()
-            except: messagebox.showerror("錯誤", "請輸入正確數字格式")
+            except Exception as ex:
+                messagebox.showerror("錯誤", f"請輸入正確數字格式: {ex}")
 
         ttk.Button(win, text="儲存 (Enter)", command=confirm_edit).pack(pady=15)
         win.bind("<Return>", confirm_edit) # 綁定鍵盤 Enter
@@ -1460,16 +1533,30 @@ class SalesApp:
                 self.var_v_leadtime.set("等待首次到貨")
                 return
 
-            # --- 後續計算邏輯 (僅針對 v_data 結案資料) ---
+           # --- [核心改動 A：導入使用者自定義參數] ---
+            # 權重
+            w_q = self.var_w_quality.get()     # 品質
+            w_p = self.var_w_prep.get()        # 備貨
+            w_f = self.var_w_fulfill.get()     # 滿足
+            w_t = self.var_w_transit.get()     # 運輸
+            
+            # 標準 (天數)
+            std_p = self.var_std_prep.get()
+            std_t = self.var_std_transit.get()
+            
+            # 混合佔比
+            sys_ratio = self.var_w_system_ratio.get()
+
+            # --- [數據清洗與基礎指標計算] ---
             pur_dt = pd.to_datetime(v_data['採購日期'], errors='coerce')
             ship_dt = pd.to_datetime(v_data['賣家交付日期'], errors='coerce')
             in_dt = pd.to_datetime(v_data['入庫日期'], errors='coerce')
 
-            # 1. 備貨天數
+            # 1. 備貨天數 (交付 - 採購)
             prep_series = (ship_dt - pur_dt).dt.days.dropna()
             avg_prep = round(prep_series.mean(), 1) if not prep_series.empty else 0
 
-            # 2. 運輸天數
+            # 2. 運輸天數 (入庫 - 交付)
             transit_series = (in_dt - ship_dt).dt.days.dropna()
             avg_transit = round(transit_series.mean(), 1) if not transit_series.empty else 0
 
@@ -1477,26 +1564,33 @@ class SalesApp:
             qty_s = pd.to_numeric(v_data['數量'], errors='coerce').fillna(0)
             defect_s = pd.to_numeric(v_data.get('瑕疵數量', 0), errors='coerce').fillna(0)
             total_qty = qty_s.sum()
-            total_defects = defect_s.sum()
-            q_rate = round((1 - (total_defects / total_qty)) * 100, 1) if total_qty > 0 else 0
+            q_rate = round((1 - (defect_s.sum() / total_qty)) * 100, 1) if total_qty > 0 else 0
 
             # 4. 到貨滿足率
             orig_s = pd.to_numeric(v_data.get('原始預計數量', qty_s), errors='coerce').fillna(0)
-            total_orig = orig_s.sum()
-            f_rate = round((total_qty / total_orig) * 100, 1) if total_orig > 0 else 0
+            f_rate = round((total_qty / orig_s.sum()) * 100, 1) if orig_s.sum() > 0 else 0
 
-            # 5. 系統評分 (權重維持您的設定)
-            score_prep = max(100 - (max(avg_prep - 3, 0) * 10), 0)
-            score_transit = max(100 - (max(avg_transit - 5, 0) * 10), 0)
-            system_score = (q_rate * 0.4) + (score_prep * 0.3) + (f_rate * 0.2) + (score_transit * 0.1)
+            # --- [核心改動 B：應用動態標準與加權公式] ---
+            # 備貨評分：每超過標準 std_p 天，扣 10 分
+            score_prep = max(100 - (max(avg_prep - std_p, 0) * 10), 0)
+            # 運輸評分：每超過標準 std_t 天，扣 10 分
+            score_transit = max(100 - (max(avg_transit - std_t, 0) * 10), 0)
+            
+            # 計算純系統得分 (基於使用者權重)
+            system_score = (q_rate * w_q) + (score_prep * w_p) + (f_rate * w_f) + (score_transit * w_t)
 
-            # 6. 混合人為星等
-            try: manual_stars = int(self.var_v_manual_adj.get())
-            except: manual_stars = 5
-            final_mixed_score = (system_score * 0.8) + (manual_stars * 20 * 0.2)
+            # 5. 混合人為星等 (按佔比計算)
+            try:
+                manual_stars = int(self.var_v_manual_adj.get())
+                manual_score = manual_stars * 20 # 5星=100, 4星=80
+            except:
+                manual_score = 100
+                
+            # 最終得分 = (系統分 * 佔比) + (人為分 * (1 - 佔比))
+            final_mixed_score = (system_score * sys_ratio) + (manual_score * (1 - sys_ratio))
 
-            # 7. UI 更新
-            display_text = f"{round(final_mixed_score, 1)} (到貨合格率:{int(q_rate)}% / 備貨時間:{avg_prep}d / 運輸時效:{avg_transit}d)"
+            # --- [UI 呈現] ---
+            display_text = f"{round(final_mixed_score, 1)} (質:{int(q_rate)}% / 備:{avg_prep}d / 運:{avg_transit}d)"
             self.var_v_system_score.set(display_text)
             
             total_days_series = (in_dt - pur_dt).dt.days.dropna()
@@ -1504,8 +1598,39 @@ class SalesApp:
             self.var_v_leadtime.set(f"平均總耗時: {avg_total} 天")
 
         except Exception as e:
-            print(f"評分系統出錯: {e}")
-            self.var_v_system_score.set("計算出錯")
+            import traceback
+            traceback.print_exc()
+            self.var_v_system_score.set("計算引擎發生錯誤")
+
+
+    def initialize_kpi_defaults(self):
+        """ 確保系統設定分頁具備所有必要的 KPI 參數 """
+        try:
+            df_sys = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+            
+            # 定義預設清單 (Key: Value)
+            defaults = {
+                "VENDOR_W_QUALITY": "0.4",
+                "VENDOR_W_PREP": "0.3",
+                "VENDOR_W_FULFILL": "0.2",
+                "VENDOR_W_TRANSIT": "0.1",
+                "VENDOR_STD_PREP": "3",
+                "VENDOR_STD_TRANSIT": "5",
+                "VENDOR_W_SYSTEM_RATIO": "0.8"
+            }
+            
+            changed = False
+            for key, val in defaults.items():
+                if key not in df_sys['設定名稱'].values:
+                    new_row = pd.DataFrame([{"設定名稱": key, "參數值": val}])
+                    df_sys = pd.concat([df_sys, new_row], ignore_index=True)
+                    changed = True
+            
+            if changed:
+                self._universal_save({SHEET_SYS_SETTINGS: df_sys})
+                print("KPI 預設參數已初始化。")
+        except Exception as e:
+            print(f"初始化 KPI 參數失敗: {e}")
     
 
 
@@ -1522,6 +1647,7 @@ class SalesApp:
             # 1. 讀取資料
             try:
                 df = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
+                df = df.fillna("") # 讀取後立刻清掉 nan
             except:
                 # 若讀取失敗，建立符合結構的空表
                 df = pd.DataFrame(columns=[
@@ -1583,6 +1709,9 @@ class SalesApp:
                         df.at[idx, key] = val
             else:
                 df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+
+            df = df.dropna(subset=['廠商名稱'])
+            df = df[df['廠商名稱'] != ""]
 
             # 移除臨時欄位
             if '廠商名稱_clean' in df.columns:
@@ -1724,177 +1853,134 @@ class SalesApp:
         self.calculate_analysis_data()
 
     def calculate_analysis_data(self):
-        """ 核心分析邏輯 V4.2:修正消失問題，並列出近 10 日明細 """
+        """ 核心分析邏輯 V4.3: 使用 Decimal 高精度運算，修正消失問題 """
         if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'): return
         
-        # 1. 清空舊介面
         for i in self.tree_time_stats.get_children(): self.tree_time_stats.delete(i)
         for i in self.tree_prod_stats.get_children(): self.tree_prod_stats.delete(i)
         
         if not os.path.exists(FILE_NAME): return
 
         try:
-            # 2. 一次性讀取銷售與商品分頁
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
 
             if df_sales.empty: return
 
-            # --- [關鍵步驟 A]：清洗資料與填充留白 ---
-            # 將完全空白的儲存格轉為真正的空值 (NaN)，ffill 才會生效
+            # --- [數據清洗] ---
             df_sales = df_sales.replace(r'^\s*$', pd.NA, regex=True)
-            
-            # 針對 Excel 美觀留白處進行向下填充
             fill_cols = ['訂單編號', '日期', '買家名稱', '交易平台']
             for col in fill_cols:
                 if col in df_sales.columns:
                     df_sales[col] = df_sales[col].ffill()
 
-            # 只保留「有商品名稱」的列，避免算到 Excel 底部的空行
             df_sales = df_sales.dropna(subset=['商品名稱'])
-
-            # 轉換數字欄位，出錯則填 0
-            num_cols = ['總銷售額', '總成本', '數量', '總淨利']
-            for col in num_cols:
-                if col in df_sales.columns:
-                    df_sales[col] = pd.to_numeric(df_sales[col], errors='coerce').fillna(0)
-
-            # 處理日期 (強制轉換，失敗的會變成 NaT)
             df_sales['日期'] = pd.to_datetime(df_sales['日期'], errors='coerce')
             
-            # 處理毛利率 (轉換為數字方便平均運算)
-            df_sales['毛利率_數值'] = pd.to_numeric(df_sales['毛利率'].astype(str).str.replace('%', ''), errors='coerce').fillna(0)
-
-            # --- [關鍵步驟 B]：左側月份與每日統計 (修正消失點) ---
-            # 建立一個乾淨的有日期的 DataFrame 用於時間統計
+            # --- [左側：時間維度統計] ---
             df_time = df_sales.dropna(subset=['日期']).copy()
 
             if not df_time.empty:
-                # 1. 月份匯總
                 df_time['月份'] = df_time['日期'].dt.strftime('%Y-%m')
-                monthly_group = df_time.groupby('月份').agg({
-                    '總銷售額': 'sum',
-                    '總淨利': 'sum',
-                    '訂單編號': 'nunique', # 計算不重複單數
-                    '數量': 'sum'
-                }).sort_index(ascending=False)
+                
+                # 按月份分組並使用 Decimal 計算
+                monthly_list = []
+                for month, group in df_time.groupby('月份', sort=False):
+                    m_sales = Decimal("0.00")
+                    m_profit = Decimal("0.00")
+                    for _, r in group.iterrows():
+                        m_sales += Decimal(str(r.get('總銷售額', 0)))
+                        m_profit += Decimal(str(r.get('總淨利', 0)))
+                    
+                    monthly_list.append({
+                        'month': month,
+                        'sales': m_sales,
+                        'profit': m_profit,
+                        'count': group['訂單編號'].nunique()
+                    })
+                
+                # 排序 (最新月份在前)
+                monthly_list.sort(key=lambda x: x['month'], reverse=True)
 
-                # 更新頂部看板數字 (本月)
-                latest_m = monthly_group.index[0]
-                self.lbl_month_sales.config(text=f"本月({latest_m}) 營收: ${monthly_group.iloc[0]['總銷售額']:,.0f}")
-                self.lbl_month_profit.config(text=f"本月({latest_m}) 淨利: ${monthly_group.iloc[0]['總淨利']:,.0f}")
+                # 更新頂部看板 (本月)
+                if monthly_list:
+                    curr = monthly_list[0]
+                    self.lbl_month_sales.config(text=f"本月({curr['month']}) 營收: ${float(curr['sales']):,.2f}")
+                    self.lbl_month_profit.config(text=f"本月({curr['month']}) 淨利: ${float(curr['profit']):,.2f}")
 
-                # 填入左側表格 (月份部分)
-                for m, row in monthly_group.iterrows():
+                # 填入月份表格
+                for m in monthly_list:
                     self.tree_time_stats.insert("", "end", values=(
-                        f"{m} (月)", 
-                        f"${row['總銷售額']:,.0f}", 
-                        f"${row['總淨利']:,.0f}", 
-                        f"{int(row['訂單編號'])} 單"
+                        f"{m['month']} (月)", 
+                        f"${float(m['sales']):,.2f}", 
+                        f"${float(m['profit']):,.2f}", 
+                        f"{int(m['count'])} 單"
                     ))
 
-                # 插入分隔線
                 self.tree_time_stats.insert("", "end", values=("--- 近10日明細 ---", "", "", ""))
 
-                # 2. 每日明細 (修正為近 10 日)
+                # 每日明細計算 (Decimal)
                 df_time['日期字串'] = df_time['日期'].dt.strftime('%Y-%m-%d')
-                daily_group = df_time.groupby('日期字串').agg({
-                    '總銷售額': 'sum',
-                    '總淨利': 'sum',
-                    '訂單編號': 'nunique'
-                }).sort_index(ascending=False).head(10) # 這裡改為 10
+                daily_groups = df_time.groupby('日期字串', sort=False)
+                
+                daily_list = []
+                for d_str, group in daily_groups:
+                    d_sales = Decimal("0.00")
+                    d_profit = Decimal("0.00")
+                    for _, r in group.iterrows():
+                        d_sales += Decimal(str(r.get('總銷售額', 0)))
+                        d_profit += Decimal(str(r.get('總淨利', 0)))
+                    daily_list.append((d_str, d_sales, d_profit, group['訂單編號'].nunique()))
 
-                for d, row in daily_group.iterrows():
+                daily_list.sort(key=lambda x: x[0], reverse=True)
+                for d in daily_list[:10]:
                     self.tree_time_stats.insert("", "end", values=(
-                        d, 
-                        f"${row['總銷售額']:,.0f}", 
-                        f"${row['總淨利']:,.0f}", 
-                        f"{int(row['訂單編號'])} 單"
+                        d[0], f"${float(d[1]):,.2f}", f"${float(d[2]):,.2f}", f"{int(d[3])} 單"
                     ))
 
-            # --- [關鍵步驟 C]：右側商品排行 (銷售速度) ---
-            try:
-                # 1. 統一清洗名稱 (避免空格造成 Map 失敗)
-                df_prods['商品名稱'] = df_prods['商品名稱'].astype(str).str.strip()
-                df_sales['商品名稱'] = df_sales['商品名稱'].astype(str).str.strip()
+            # --- [右側：商品排行] ---
+            # 排行計算時將毛利率轉為 Decimal 平均
+            df_sales['毛利_D'] = df_sales['總淨利'].apply(lambda x: Decimal(str(x)))
+            df_sales['銷額_D'] = df_sales['總銷售額'].apply(lambda x: Decimal(str(x)))
+            
+            prod_group = df_sales.groupby('商品名稱').agg({
+                '數量': 'sum',
+                '總淨利': 'sum' # 這裡暫用 float 沒關係，顯示時再轉
+            }).reset_index()
 
-                # 2. 處理商品分頁的上架時間
-                start_col = "初始上架時間"
-                if start_col not in df_prods.columns:
-                    df_prods[start_col] = pd.NA
-                
-                # 強制轉換日期格式
-                df_prods[start_col] = pd.to_datetime(df_prods[start_col], errors='coerce')
-                
-                # 建立名稱對應上架日的地圖
-                start_date_map = df_prods.set_index('商品名稱')[start_col].to_dict()
+            # 速度計算邏輯維持不變，但結果轉為 Decimal
+            now = pd.Timestamp.now()
+            start_date_map = df_prods.set_index('商品名稱')['初始上架時間'].to_dict()
+            first_sale_map = df_sales.groupby('商品名稱')['日期'].min().to_dict()
 
-                # 3. 備援邏輯：從銷售紀錄抓取「每個商品的第一筆成交日」
-                # 這是為了預防 Excel 上架時間漏填
-                first_sale_map = df_sales.groupby('商品名稱')['日期'].min().to_dict()
+            def calc_v(row):
+                p_name = row['商品名稱']
+                st = pd.to_datetime(start_date_map.get(p_name), errors='coerce')
+                if pd.isna(st): st = first_sale_map.get(p_name)
+                if pd.isna(st): st = now
+                days = max((now - st).days, 1)
+                return round(float(row['數量']) / days, 2)
 
-                # 4. 聚合銷售數據
-                prod_group = df_sales.groupby('商品名稱').agg({
-                    '毛利率_數值': 'mean',
-                    '總淨利': 'sum',
-                    '數量': 'sum'
-                }).reset_index()
+            prod_group['velocity'] = prod_group.apply(calc_v, axis=1)
 
-                now = pd.Timestamp.now()
+            for _, r in prod_group.iterrows():
+                # 計算該商品的平均毛利率 (Decimal)
+                p_items = df_sales[df_sales['商品名稱'] == r['商品名稱']]
+                total_p_sales = p_items['銷額_D'].sum()
+                total_p_profit = p_items['毛利_D'].sum()
+                avg_margin = (total_p_profit / total_p_sales * 100) if total_p_sales > 0 else Decimal("0")
 
-                def calculate_velocity(row):
-                    p_name = row['商品名稱']
-                    total_qty = row['數量']
-                    
-                    # 優先序 A: Excel 填寫的初始上架時間
-                    st_date = start_date_map.get(p_name)
-                    
-                    # 優先序 B: 若 A 缺失，使用該商品在系統中的第一筆銷售日
-                    if pd.isna(st_date):
-                        st_date = first_sale_map.get(p_name)
-                    
-                    # 優先序 C: 若連銷售日都抓不到(理論上不會)，預設為 30 天前 (避免暴增)
-                    if pd.isna(st_date):
-                        st_date = now - pd.Timedelta(days=30)
-
-                    # 計算天數差 (精確到小數點)
-                    delta = now - st_date
-                    days_diff = delta.total_seconds() / 86400 # 轉換為總天數
-                    
-                    # 限制最小分母為 1 天 (避免剛上架 1 小時賣 1 個就被算成時速 24 也就是日速 24)
-                    velocity = total_qty / max(days_diff, 1)
-                    return round(velocity, 2)
-
-                # 執行速度計算
-                prod_group['velocity'] = prod_group.apply(calculate_velocity, axis=1)
-
-                # 5. 排序邏輯
-                sort_mode = self.var_prod_sort_by.get()
-                sort_map = {
-                    "平均毛利率": '毛利率_數值', 
-                    "總銷量排行": '數量', 
-                    "總獲利排行": '總淨利', 
-                    "銷售速度排行": 'velocity'
-                }
-                prod_group = prod_group.sort_values(sort_map.get(sort_mode, 'velocity'), ascending=False)
-
-                # 6. 填入右側表格
-                for _, row in prod_group.iterrows():
-                    self.tree_prod_stats.insert("", "end", values=(
-                        row['商品名稱'], 
-                        f"{row['毛利率_數值']:.1f}%", 
-                        f"${row['總淨利']:,.0f}", 
-                        int(row['數量']), 
-                        f"{row['velocity']} 件/日"
-                    ))
-
-            except Exception as e:
-                print(f"商品排行計算出錯: {e}")
+                self.tree_prod_stats.insert("", "end", values=(
+                    r['商品名稱'], 
+                    f"{float(avg_margin):.1f}%", 
+                    f"${float(r['總淨利']):,.2f}", 
+                    int(r['數量']), 
+                    f"{r['velocity']} 件/日"
+                ))
 
         except Exception as e:
             import traceback
-            print("分析功能報錯：")
             traceback.print_exc()
 
             
@@ -3534,7 +3620,49 @@ class SalesApp:
         self.chk_auto_login.pack(side="left")
         ttk.Label(bypass_f, text="* 勾選後下次啟動將跳過登入視窗", foreground="gray", font=("", 9)).pack(side="left", padx=20)
 
-        # --- 第四區：商品欄位顯示 ---
+        #--- 第四區補充：廠商績效評估參數設定 ---
+        vendor_kpi_f = ttk.LabelFrame(main_frame, text="📊 廠商績效評估參數 (自定義權重與標準)", padding=15)
+        vendor_kpi_f.pack(fill="x", pady=5)
+
+        # 使用子容器來排版
+        kpi_grid = ttk.Frame(vendor_kpi_f)
+        kpi_grid.pack(fill="x")
+
+        # 設定 Grid 欄位權重
+        for i in range(4): kpi_grid.columnconfigure(i, weight=1)
+
+        # --- 第 1 排：權重設定 (加總建議為 1.0) ---
+        ttk.Label(kpi_grid, text="品質權重:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_w_quality, width=8).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(kpi_grid, text="備貨權重:").grid(row=0, column=2, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_w_prep, width=8).grid(row=0, column=3, sticky="w")
+
+        # --- 第 2 排：權重設定 ---
+        ttk.Label(kpi_grid, text="滿足率權重:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_w_fulfill, width=8).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(kpi_grid, text="運輸權重:").grid(row=1, column=2, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_w_transit, width=8).grid(row=1, column=3, sticky="w")
+
+        # --- 第 3 排：扣分標準 (天數) ---
+        ttk.Label(kpi_grid, text="備貨標準(天):").grid(row=2, column=0, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_std_prep, width=8).grid(row=2, column=1, sticky="w")
+
+        ttk.Label(kpi_grid, text="運輸標準(天):").grid(row=2, column=2, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_std_transit, width=8).grid(row=2, column=3, sticky="w")
+
+        # --- 第 4 排：混合比例與儲存按鈕 ---
+        ttk.Label(kpi_grid, text="系統數據佔比:").grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        ttk.Entry(kpi_grid, textvariable=self.var_w_system_ratio, width=8).grid(row=3, column=1, sticky="w")
+
+        btn_save_kpi = ttk.Button(kpi_grid, text="💾 儲存評分參數", command=self.save_vendor_kpi_settings, width=15)
+        btn_save_kpi.grid(row=3, column=2, columnspan=2, sticky="w", padx=20)
+
+        ttk.Label(vendor_kpi_f, text="* 權重建議：四項權重加總應為 1.0 (例如 0.4+0.3+0.2+0.1)。系統數據佔比 0.8 代表人為星等佔 0.2。", 
+                  foreground="gray", font=("", 9)).pack(anchor="w", pady=(5,0))
+
+        # --- 第五區：商品欄位顯示 ---
         field_cfg_frame = ttk.LabelFrame(main_frame, text="👁️ 商品資料欄位顯示", padding=15)
         field_cfg_frame.pack(fill="x", pady=5)
 
@@ -3548,6 +3676,76 @@ class SalesApp:
         self.refresh_fee_tree()
 
 
+    def save_vendor_kpi_settings(self):
+        """ 
+        儲存 KPI 參數 (含防呆校驗)：
+        1. 檢查四大權重總和是否等於 1.0
+        2. 檢查數值是否在合理範圍 (0~1)
+        """
+        try:
+            # --- [核心防呆：取得數值並計算總和] ---
+            w_q = self.var_w_quality.get()
+            w_p = self.var_w_prep.get()
+            w_f = self.var_w_fulfill.get()
+            w_t = self.var_w_transit.get()
+            
+            w_sum = w_q + w_p + w_f + w_t
+
+            # 1. 檢查各項是否為負數
+            if any(w < 0 for w in [w_q, w_p, w_f, w_t]):
+                messagebox.showerror("權重錯誤", "權重數值不能為負數！")
+                return
+
+            # 2. 檢查總和是否等於 1.0 
+            # (註：浮點數運算會有微小誤差，故使用 abs(diff) < 0.0001 判斷)
+            if abs(w_sum - 1.0) > 0.0001:
+                messagebox.showerror("權重校驗失敗", 
+                                     f"四大權重 (品質+備貨+滿足+運輸) 的總和必須等於 1.0！\n\n"
+                                     f"您目前的輸入：\n"
+                                     f"● 品質：{w_q}\n"
+                                     f"● 備貨：{w_p}\n"
+                                     f"● 滿足：{w_f}\n"
+                                     f"● 運輸：{w_t}\n"
+                                     f"-------------------\n"
+                                     f"目前總和：{round(w_sum, 2)}\n\n"
+                                     f"請修正後再行儲存。")
+                return
+
+            # 3. 檢查系統佔比 (應在 0 到 1 之間)
+            s_ratio = self.var_w_system_ratio.get()
+            if not (0 <= s_ratio <= 1):
+                messagebox.showerror("參數錯誤", "系統數據佔比必須介於 0 到 1 之間！\n(例如 0.8 代表系統佔 80%)")
+                return
+
+            # --- [通過驗證，執行儲存] ---
+            df_sys = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+            
+            new_data = {
+                "VENDOR_W_QUALITY": str(w_q),
+                "VENDOR_W_PREP": str(w_p),
+                "VENDOR_W_FULFILL": str(w_f),
+                "VENDOR_W_TRANSIT": str(w_t),
+                "VENDOR_STD_PREP": str(self.var_std_prep.get()),
+                "VENDOR_STD_TRANSIT": str(self.var_std_transit.get()),
+                "VENDOR_W_SYSTEM_RATIO": str(s_ratio)
+            }
+
+            for key, val in new_data.items():
+                if key in df_sys['設定名稱'].values:
+                    df_sys.loc[df_sys['設定名稱'] == key, '參數值'] = val
+                else:
+                    new_row = pd.DataFrame([{"設定名稱": key, "參數值": val}])
+                    df_sys = pd.concat([df_sys, new_row], ignore_index=True)
+
+            if self._universal_save({SHEET_SYS_SETTINGS: df_sys}):
+                messagebox.showinfo("成功", "廠商評估參數已通過校驗並儲存成功！")
+                
+        except tk.TclError:
+            messagebox.showerror("輸入錯誤", "請確保所有權重皆輸入正確的數字格式！")
+        except Exception as e:
+            messagebox.showerror("系統錯誤", f"儲存失敗: {e}")
+
+
     def update_system_auth(self):
         new_u = self.var_new_user.get().strip()
         new_p = self.var_new_pass.get().strip()
@@ -3558,6 +3756,7 @@ class SalesApp:
 
         if messagebox.askyesno("確認", f"確定要將系統管理員變更為「{new_u}」嗎？\n請務必記住新密碼！"):
             try:
+
                 auth_data = {
                     "user": new_u,
                     "pass": secure_hash(new_p) # 儲存雜湊值，而非明文
@@ -4157,10 +4356,14 @@ class SalesApp:
 
 # [新增這個輔助函式]：統一計算並更新介面
     def update_pur_cart_total(self):
-        """ 重新計算進貨購物車總額並更新 UI """
-        total_sum = sum(item['total'] for item in self.pur_cart_data)
+        """ 使用 Decimal 重新計算進貨購物車總計 """
+        total_sum = Decimal("0.00")
+        for item in self.pur_cart_data:
+            total_sum += Decimal(str(item['total']))
+        
         if hasattr(self, 'lbl_pur_total'):
-            self.lbl_pur_total.config(text=f"本次進貨總額: ${total_sum:,.0f}")
+            # 格式化輸出：加上千分位與固定兩位小數
+            self.lbl_pur_total.config(text=f"本次進貨總額: ${float(total_sum):,.2f}")
 
 
     def submit_purchase(self):
@@ -4392,32 +4595,37 @@ class SalesApp:
 
     
     def _get_full_order_info(self, df, order_id):
-        """ 輔助函式：從同一編號中找出有資料的列，回傳表頭資訊字典 """
-        # 確保 order_id 是乾淨的字串
-        clean_id = str(order_id).replace("'", "")
+        """ 強化版：從同一編號中找出『任何一列』含有資料的內容，確保不會因刪除首行而遺失資訊 """
+        clean_id = str(order_id).replace("'", "").strip()
+        # 找出該訂單的所有列
         subset = df[df['訂單編號'].astype(str).str.contains(clean_id)]
         
-        # 找尋第一個日期不為空的列
-        headers = subset[subset['日期'].notna() & (subset['日期'] != "")]
-        if not headers.empty:
-            h = headers.iloc[0]
-            return {
-                '日期': h['日期'], '買家名稱': h['買家名稱'], 
-                '交易平台': h['交易平台'], '寄送方式': h['寄送方式'], 
-                '取貨地點': h['取貨地點']
-            }
-        return {}
+        if subset.empty: return {}
+
+        # 定義需要找尋的標頭欄位
+        header_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點', '扣費項目']
+        result = {}
+
+        for col in header_cols:
+            if col in subset.columns:
+                # 找尋該欄位中第一個不是空的、不是 NaN 的值
+                valid_rows = subset[subset[col].notna() & (subset[col].astype(str).str.strip() != "")]
+                if not valid_rows.empty:
+                    result[col] = valid_rows.iloc[0][col]
+                else:
+                    result[col] = "" # 若真的都沒資料則留空
+        return result
     
 
     def action_track_return_item(self):
-        """ 退貨單一商品 (修正存檔格式) """
+        """ 退貨單一商品：若刪除的是標頭行，自動將資訊傳承給下一筆商品 """
         from tkinter import simpledialog
         sel = self.tree_track.selection()
         if not sel: return
         
         item = self.tree_track.item(sel[0])
-        idx = int(item['text'])
-        order_id = str(item['values'][0]).replace("'", "")
+        idx = int(item['text']) # Excel 原始行號
+        order_id = str(item['values'][0]).replace("'", "").strip()
         prod_name = str(item['values'][4])
 
         reason = simpledialog.askstring("退貨", f"商品: {prod_name}\n請輸入退貨原因:", parent=self.root)
@@ -4425,156 +4633,189 @@ class SalesApp:
 
         try:
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
 
-            info = self._get_full_order_info(df_track, order_id)
+            # A. 備份要移走的這一行
             row_to_move = df_track.loc[[idx]].copy()
-            for col, val in info.items(): row_to_move[col] = val
-            row_to_move['備註'] = reason
-
-            # 補位邏輯
-            is_header = pd.notna(df_track.at[idx, '日期']) and str(df_track.at[idx, '日期']) != ""
-            if is_header:
+            
+            # B. 檢查這行是否帶有標頭資訊
+            has_info = pd.notna(df_track.at[idx, '日期']) and str(df_track.at[idx, '日期']) != ""
+            
+            if has_info:
+                # 找出同訂單的其他商品
                 others = df_track[(df_track['訂單編號'] == order_id) & (df_track.index != idx)].index.tolist()
                 if others:
-                    new_h = others[0]
-                    for col in info.keys(): df_track.at[new_h, col] = df_track.at[idx, col]
+                    # 將標頭資訊傳承給下一個商品 (補位)
+                    new_header_idx = others[0]
+                    header_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點', '扣費項目']
+                    for col in header_cols:
+                        df_track.at[new_header_idx, col] = df_track.at[idx, col]
 
+            # C. 執行移動
             df_track.drop(idx, inplace=True)
             try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
             except: df_returns = pd.DataFrame()
+            
+            # 存入退貨區前，確保退貨區的那一行資訊是完整的 (方便查帳)
+            full_info = self._get_full_order_info(df_track, order_id) # 這裡要稍微注意邏輯順序
+            for col, val in full_info.items(): row_to_move[col] = val
+            row_to_move['備註'] = reason
+
             df_returns = pd.concat([df_returns, row_to_move], ignore_index=True)
 
-            # ---【關鍵修正：使用大括號字典傳參】---
-            success = self._universal_save({
-                SHEET_TRACKING: df_track, 
-                SHEET_RETURNS: df_returns
-            })
-            
-            if success:
-                messagebox.showinfo("成功", f"商品「{prod_name}」已移至退貨紀錄。")
+            if self._universal_save({SHEET_TRACKING: df_track, SHEET_RETURNS: df_returns}):
+                messagebox.showinfo("成功", f"商品「{prod_name}」已移至退貨，資料已自動補位。")
                 self.load_tracking_data(); self.load_returns_data()
-        except Exception as e: messagebox.showerror("錯誤", str(e))
+        except Exception as e: 
+            messagebox.showerror("錯誤", str(e))
 
 
     
     def action_track_complete_order(self):
-        """ 完成訂單/整筆結案 (修正存檔格式) """
+        """ 
+        完成訂單 V5.1 (防斷鏈修正版)：
+        解決留白資料排序後掉到最底部的問題
+        """
         sel = self.tree_track.selection()
         if not sel: return
-        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0]).replace("'", "")
+        item = self.tree_track.item(sel[0])
+        order_id = str(item['values'][0]).replace("'", "").strip()
 
         if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？"): return
 
         try:
+            # 1. 讀取追蹤與銷售紀錄
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            # 統一格式化編號
-            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
+            df_track['訂單編號'] = df_track['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
             
             try: 
                 df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
             except: 
                 df_sales = pd.DataFrame()
 
+            # --- [核心修正步驟 A：處理舊有銷售紀錄，防止排序斷鏈] ---
+            if not df_sales.empty:
+                # 先將所有空字串轉為真正的 NaN，這樣 ffill 才會生效
+                df_sales = df_sales.replace(r'^\s*$', pd.NA, regex=True)
+                
+                # 為了防止排序時空日期掉到最後，我們先按『訂單編號』分組，把遺失的日期與買家補回來
+                header_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點', '扣費項目']
+                # 暫時清理編號以便匹配
+                df_sales['tmp_id'] = df_sales['訂單編號'].astype(str).str.replace("'", "").str.strip()
+                # 分組向下填充：這確保每一行商品都暫時擁有正確的日期
+                df_sales[header_cols] = df_sales.groupby('tmp_id', group_keys=False)[header_cols].apply(lambda x: x.ffill().bfill())
+
+            # 2. 獲取本次要結案的訂單資訊
+            full_info = self._get_full_order_info(df_track, order_id)
             mask = df_track['訂單編號'] == order_id
             rows_to_finish = df_track[mask].copy()
-            
-            # --- [新增：確保結案前填滿該單的所有資訊] ---
-            # 這樣統計時，每一行商品都有對應的日期和買家，才不會算錯
-            info = self._get_full_order_info(df_track, order_id)
-            for col, val in info.items():
-                rows_to_finish[col] = val  # 強制將日期、買家等資訊填入每一列
 
-            # 合併到銷售紀錄
+            # 確保這次結案的資料也是完整的
+            for col, val in full_info.items():
+                rows_to_finish[col] = val
+
+            # 3. 合併新舊資料
             df_sales_combined = pd.concat([df_sales, rows_to_finish], ignore_index=True)
 
-            # --- [核心修正：自動按日期與編號排序] ---
-            # 確保銷售紀錄永遠是最新日期在最下面(或最上面)
+            # --- [核心修正步驟 B：執行精準排序] ---
+            # 統一轉換日期格式，這時因為 A 步驟補過位，日期不會是空的
             df_sales_combined['tmp_date'] = pd.to_datetime(df_sales_combined['日期'], errors='coerce')
-            df_sales_combined = df_sales_combined.sort_values(by=['tmp_date', '訂單編號'], ascending=[True, True])
-            df_sales_combined.drop(columns=['tmp_date'], inplace=True)
+            # 將訂單編號轉為清潔字串進行排序
+            df_sales_combined['tmp_clean_id'] = df_sales_combined['訂單編號'].astype(str).str.replace("'", "").str.strip()
+            
+            # 排序：日期(新到舊) -> 編號(大到小)
+            df_sales_combined = df_sales_combined.sort_values(by=['tmp_date', 'tmp_clean_id'], ascending=[False, False])
+            df_sales_combined = df_sales_combined.reset_index(drop=True)
 
-                # 執行萬用存檔
+            # --- [核心修正步驟 C：重新執行視覺去重 (美化)] ---
+            prev_id = None
+            for i in range(len(df_sales_combined)):
+                curr_id = df_sales_combined.at[i, 'tmp_clean_id']
+                if curr_id == prev_id:
+                    # 同一單的後續列，清空重複資訊
+                    for col in header_cols:
+                        df_sales_combined.at[i, col] = ""
+                else:
+                    # 新訂單的第一列，保留資訊
+                    prev_id = curr_id
+            
+            # 移除所有臨時輔助欄位
+            drop_cols = ['tmp_date', 'tmp_clean_id', 'tmp_id']
+            df_sales_combined = df_sales_combined.drop(columns=[c for c in drop_cols if c in df_sales_combined.columns])
+
+            # 4. 執行萬用存檔
             success = self._universal_save({
                 SHEET_TRACKING: df_track[~mask], 
                 SHEET_SALES: df_sales_combined
             })
         
             if success:
-                messagebox.showinfo("成功", f"訂單 {order_id} 已結案並自動排序優化！")
+                messagebox.showinfo("成功", f"訂單 {order_id} 結案成功！全表已重新自動校準與美化。")
                 self.load_tracking_data()
                 self.calculate_analysis_data()
-        except Exception as e: 
-            messagebox.showerror("錯誤", str(e))
+                
+        except Exception as e:   
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("錯誤", f"結案失敗: {str(e)}")
 
 
     def _universal_save(self, updates_dict):
-        """ 強化版萬用存檔引擎：防止分頁消失，並強制保護 ID 與物流單號為文字格式 """
+        """ 強化版萬用存檔引擎 """
         try:
             all_data = {}
-            # 1. 先讀取目前 Excel 裡「所有的」分頁內容
             if os.path.exists(FILE_NAME):
                 with pd.ExcelFile(FILE_NAME) as xls:
                     for sn in xls.sheet_names:
                         all_data[sn] = pd.read_excel(xls, sheet_name=sn)
             
-            # 2. 將本次有變動的分頁「覆蓋」進字典中
             for sheet_name, df in updates_dict.items():
                 all_data[sheet_name] = df
 
-            # 3. 核心數據清洗：防止長數字變成浮點數 (.0) 或科學記號
-            # 定義需要被強制轉為純文字且加上單引號保護的欄位
-            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '物流單號']
+            # --- [核心安全修復：強制清除 nan 字串] ---
+            # 定義需要特別保護的 ID 與 名稱欄位
+            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名']
 
             for sn, df in all_data.items():
                 if df is None or df.empty: continue
                 
-                for col in text_protection_cols:
-                    if col in df.columns:
-                        # 定義清洗邏輯：轉字串 -> 去掉 .0 -> 去掉 nan -> 補上單引號
-                        def force_text_format(x):
-                            if pd.isna(x) or str(x).strip().lower() in ['nan', 'none', '']:
-                                return ""
-                            
-                            # 轉為字串並去除前後空格
+                # A. 先將整張表所有的 NaN 轉為空字串
+                df = df.fillna("")
+
+                # B. 針對關鍵欄位進行深度清潔
+                for col in df.columns:
+                    if col in text_protection_cols:
+                        def clean_id_and_names(x):
                             s = str(x).strip()
-                            
-                            # 處理 Pandas 自動產生的 .0 (針對長數字浮點數)
-                            if s.endswith('.0'):
-                                s = s[:-2]
-                            
-                            # 確保開頭只有一個單引號，防止重複添加變成 ''12345
+                            if s.lower() in ['nan', 'none', '', 'nat']: return ""
+                            if s.endswith('.0'): s = s[:-2]
                             s = s.lstrip("'")
-                            return f"'{s}"
-
-                        df[col] = df[col].apply(force_text_format)
-
-            # 4. 寫回 Excel (按照標準順序排列分頁)
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                standard_order = [
-                    SHEET_PRODUCTS, SHEET_SALES, SHEET_TRACKING, 
-                    SHEET_PURCHASES, SHEET_PUR_TRACKING, SHEET_RETURNS, SHEET_FEES, SHEET_SYS_SETTINGS
-                ]
+                            # 只有 ID 類才加單引號，名稱類不需要
+                            if col in ['訂單編號', '進貨單號', '物流追蹤']:
+                                return f"'{s}"
+                            return s
+                        
+                        df[col] = df[col].apply(clean_id_and_names)
                 
-                # 先依序寫入定義好的標準分頁
+                # C. 如果是廠商分頁，確保『廠商名稱』這一欄沒有空行被存入
+                if sn == SHEET_VENDORS:
+                    df = df[df['廠商名稱'].astype(str).str.lower() != "nan"]
+                    df = df[df['廠商名稱'].astype(str).str.strip() != ""]
+                
+                all_data[sn] = df
+
+            # 4. 寫回 Excel 
+            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
+                standard_order = [SHEET_PRODUCTS, SHEET_SALES, SHEET_TRACKING, SHEET_PURCHASES, SHEET_PUR_TRACKING, SHEET_RETURNS, SHEET_FEES, SHEET_SYS_SETTINGS, SHEET_VENDORS]
                 for sn in standard_order:
                     if sn in all_data:
                         all_data[sn].to_excel(writer, sheet_name=sn, index=False)
-                
-                # 若有自定義的其他分頁，也一併補回
                 for sn, df in all_data.items():
                     if sn not in standard_order:
                         df.to_excel(writer, sheet_name=sn, index=False)
-            
             return True
-            
-        except PermissionError:
-            messagebox.showerror("存檔失敗", "Excel 檔案正被開啟中，請先關閉 Excel 後再按存檔！")
-            return False
         except Exception as e:
-            import traceback
-            traceback.print_exc() # 在終端機印出詳細報錯，方便 Debug
-            messagebox.showerror("嚴重錯誤", f"存檔引擎故障: {str(e)}")
+            messagebox.showerror("存檔引擎故障", f"錯誤詳情: {str(e)}")
             return False
     
 
@@ -4738,184 +4979,171 @@ class SalesApp:
     
     
     def update_totals(self):
+        """ 銷售輸入：使用 Decimal 進行高精度財務運算 """
         try:
-            # 1. 基礎商品總額與成本
-            t_sales = sum(i['total_sales'] for i in self.cart_data)
-            t_cost = sum(i['total_cost'] for i in self.cart_data)
+            # 1. 基礎商品總額與成本 (從購物車累加)
+            t_sales = Decimal("0.00")
+            t_cost = Decimal("0.00")
+            for i in self.cart_data:
+                t_sales += Decimal(str(i['total_sales']))
+                t_cost += Decimal(str(i['total_cost']))
             
-            # --- [優化後的費率解析邏輯] ---
+            # 2. 獲取費率與固定金額 (轉為 Decimal)
             selection = self.var_fee_rate_str.get().strip()
-            rate = 0.0
-            fixed_fee = 0.0
+            d_rate = Decimal("0.00")
+            d_fixed = Decimal("0.00")
 
-            # A. 檢查是否為預設的 Excel 選項
             if selection in self.fee_lookup:
-                rate, fixed_fee = self.fee_lookup[selection]
+                rate_val, fixed_val = self.fee_lookup[selection]
+                d_rate = Decimal(str(rate_val))
+                d_fixed = Decimal(str(fixed_val))
             else:
-                # B. 若非預設選項，嘗試解析使用者輸入的數字
                 try:
-                    # 去除 % 符號並轉為浮點數
                     clean_input = selection.replace("%", "")
-                    if clean_input:
-                        rate = float(clean_input)
-                except ValueError:
-                    rate = 0.0
-            # ---------------------------------------
+                    if clean_input: d_rate = Decimal(clean_input)
+                except: d_rate = Decimal("0.00")
 
-            # 2. 獲取運費與折扣
-            try: ship_fee = float(self.var_ship_fee.get())
-            except: ship_fee = 0.0
-            try: extra_deduct = float(self.var_extra_fee.get())
-            except: extra_deduct = 0.0
+            # 3. 獲取運費與額外折扣
+            try: d_ship = Decimal(str(self.var_ship_fee.get()))
+            except: d_ship = Decimal("0.00")
+            try: d_extra = Decimal(str(self.var_extra_fee.get()))
+            except: d_extra = Decimal("0.00")
 
             payer = self.var_ship_payer.get()
             
-            # 3. 計算各項支出
-            # 平台手續費計算：(總銷售額 * (百分比/100)) + 固定金額
-            platform_fee = (t_sales * (rate / 100)) + fixed_fee
+            # --- [核心財務邏輯計算] ---
+            # A. 平台手續費 (總銷售額 * 費率 + 固定費)
+            platform_fee = self.dec_round(t_sales * (d_rate / Decimal("100")) + d_fixed)
             
-            # 計算淨利
-            profit = t_sales - t_cost - platform_fee - extra_deduct
+            # B. 淨利計算
+            # 基本淨利 = 售價 - 成本 - 手續費 - 折扣
+            profit = t_sales - t_cost - platform_fee - d_extra
             if payer == "賣家付":
-                profit -= ship_fee
+                profit -= d_ship
             
-            # 計算撥款總額
+            # C. 撥款總額 (預估入帳)
             if payer == "買家付":
-                income = t_sales + ship_fee - platform_fee - extra_deduct
+                income = t_sales + d_ship - platform_fee - d_extra
             else:
-                income = t_sales - platform_fee - extra_deduct
+                income = t_sales - platform_fee - d_extra
 
-            # --- 更新 UI ---
-            self.lbl_gross.config(text=f"商品小計: ${t_sales:,.0f}")
-            self.lbl_fee.config(text=f"手續費({rate}%): -${platform_fee:,.1f} | 運費: ${ship_fee:,.0f} | 折扣: -${extra_deduct:,.0f}")
-            self.lbl_income.config(text=f"實收/撥款總額: ${income:,.1f}")
-            self.lbl_profit.config(text=f"本單純利: ${profit:,.1f}", foreground="green" if profit > 0 else "red")
+            # --- 更新 UI 顯示 ---
+            self.lbl_gross.config(text=f"商品小計: ${float(t_sales):,.2f}")
+            self.lbl_fee.config(text=f"手續費({d_rate}%): -${float(platform_fee):,.2f} | 運費: ${float(d_ship):,.2f} | 折扣: -${float(d_extra):,.2f}")
+            self.lbl_income.config(text=f"實收/撥款總額: ${float(income):,.2f}")
+            self.lbl_profit.config(text=f"本單純利: ${float(profit):,.2f}", 
+                                   foreground="green" if profit > 0 else "red")
 
-            return t_sales, platform_fee, 0
+            # 回傳 Decimal 供 submit_order 分攤使用
+            return t_sales, platform_fee, Decimal("0.00")
         except Exception as e:
-            print(f"計算出錯: {e}")
-            return 0, 0, 0
+            print(f"銷售計算出錯: {e}")
+            return Decimal("0"), Decimal("0"), Decimal("0")
         
     
         
     def submit_order(self):
-        """ 修正版：送出訂單至追蹤區，確保不覆蓋舊有資料 """
+        """ 修正版：使用 Decimal 高精度分攤手續費並存入追蹤區 """
         if not self.cart_data: return
         
-        def clean_text(text):
-            if not text: return ""
-            return text.replace("\n", "").replace("\r", "").strip()
-
         if self.var_enable_cust.get():
             cust_name = self.var_cust_name.get().strip()
-            if not cust_name or cust_name == "":
-                messagebox.showerror("欄位缺失", "您已勾選『填寫來源與顧客』，請務必輸入『買家名稱』！")
-                # 將焦點移回輸入框，方便使用者補填
-                self.entry_cust_name.focus()
-                return
-            
-            # 其餘資訊抓取
+            if not cust_name:
+                messagebox.showerror("欄位缺失", "請務必輸入『買家名稱』！")
+                self.entry_cust_name.focus(); return
             cust_loc = self.var_cust_loc.get().strip()
             ship_method = self.var_ship_method.get()
             platform_name = self.var_platform.get()
         else:
-            cust_name = "未提供" ; cust_loc = "未提供" ; ship_method = "未提供" ; platform_name = "零售/現場"
+            cust_name = cust_loc = ship_method = "未提供"; platform_name = "零售/現場"
             
         date_str = self.var_date.get().strip()
-        now = datetime.now()
-        order_id = now.strftime("%Y%m%d%H%M%S") 
+        order_id = datetime.now().strftime("%Y%m%d%H%M%S") 
 
+        # --- [獲取 Decimal 精度總額] ---
+        # 確保您的 update_totals() 現在回傳的是 (Decimal, Decimal, Decimal)
         t_sales, t_fee, t_tax = self.update_totals() 
+        
         fee_tag = self.var_fee_tag.get()
-        try: extra_val = float(self.var_extra_fee.get())
-        except: extra_val = 0
-        if extra_val > 0 and not fee_tag: fee_tag = "其他"
-        elif extra_val == 0: fee_tag = ""
+        try: d_extra = Decimal(str(self.var_extra_fee.get()))
+        except: d_extra = Decimal("0")
 
         try:
             rows = []
-            out_of_stock_warnings = [] 
-            
-            # 1. 讀取目前的商品資料 (用於更新庫存)
             df_prods_current = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
 
-            # 2. 準備本次新訂單的資料列
             for i, item in enumerate(self.cart_data):
-                if i == 0:
-                    row_date, row_platform, row_buyer, row_ship, row_loc = date_str, platform_name, cust_name, ship_method, cust_loc
-                else:
-                    row_date = row_platform = row_buyer = row_ship = row_loc = ""
-
-                ratio = item['total_sales'] / t_sales if t_sales > 0 else 0
-                alloc_fee = t_fee * ratio
-                alloc_tax = t_tax * ratio 
+                # 表頭資訊僅填於第一列
+                is_first = (i == 0)
                 
-                net = item['total_sales'] - item['total_cost'] - alloc_fee - alloc_tax
-                margin_pct = (net / item['total_sales']) * 100 if item['total_sales'] > 0 else 0.0
+                # --- [Decimal 分攤計算] ---
+                d_item_sales = Decimal(str(item['total_sales']))
+                d_item_cost = Decimal(str(item['total_cost']))
+                
+                # 按銷售佔比分攤手續費與稅額
+                ratio = d_item_sales / t_sales if t_sales > 0 else Decimal("0")
+                alloc_fee = self.dec_round(t_fee * ratio)
+                alloc_tax = self.dec_round(t_tax * ratio)
+                
+                # 淨利計算 (每一筆都必須精確)
+                # 注意：折扣(d_extra)通常在總帳扣除，這裡分攤到每一項
+                alloc_extra = self.dec_round(d_extra * ratio)
+                net = d_item_sales - d_item_cost - alloc_fee - alloc_tax - alloc_extra
+                
+                margin_pct = (net / d_item_sales * 100) if d_item_sales > 0 else Decimal("0")
 
                 rows.append({
                     "訂單編號": order_id,
-                    "商品編號": item.get('sku', ''), # 這裡把 sku 存進 Excel
-                    "日期": row_date, "買家名稱": row_buyer, "交易平台": row_platform,  
-                    "寄送方式": row_ship, "取貨地點": row_loc,
-                    "商品名稱": item['name'], "數量": item['qty'], 
-                    "單價(售)": item['unit_price'], "單價(進)": item['unit_cost'],
-                    "總銷售額": item['total_sales'], "總成本": item['total_cost'], 
-                    "分攤手續費": round(alloc_fee, 2), "扣費項目": fee_tag, 
-                    "總淨利": round(net, 2), "毛利率": round(margin_pct, 1), "稅額": round(alloc_tax, 2)
+                    "商品編號": item.get('sku', ''),
+                    "日期": date_str if is_first else "",
+                    "買家名稱": cust_name if is_first else "",
+                    "交易平台": platform_name if is_first else "",
+                    "寄送方式": ship_method if is_first else "",
+                    "取貨地點": cust_loc if is_first else "",
+                    "商品名稱": item['name'],
+                    "數量": int(item['qty']),
+                    "單價(售)": float(item['unit_price']),
+                    "單價(進)": float(item['unit_cost']),
+                    "總銷售額": float(d_item_sales),
+                    "總成本": float(d_item_cost),
+                    "分攤手續費": float(alloc_fee),
+                    "扣費項目": fee_tag if is_first else "", 
+                    "總淨利": float(self.dec_round(net)),
+                    "毛利率": float(self.dec_round(margin_pct, 1)),
+                    "稅額": float(alloc_tax)
                 })
 
-                # 庫存扣除邏輯
-                prod_name = item['name']
-                sold_qty = item['qty']
-                idxs = df_prods_current[df_prods_current['商品名稱'] == prod_name].index
+                # 扣庫存邏輯
+                p_name = item['name']
+                idxs = df_prods_current[df_prods_current['商品名稱'] == p_name].index
                 if not idxs.empty:
-                    target_idx = idxs[0]
-                    curr_stock = df_prods_current.at[target_idx, '目前庫存']
-                    df_prods_current.at[target_idx, '目前庫存'] = curr_stock - sold_qty
-                    if (curr_stock - sold_qty) <= 0:
-                        out_of_stock_warnings.append(f"● {prod_name}")
+                    df_prods_current.at[idxs[0], '目前庫存'] -= int(item['qty'])
 
-            # 3. 【核心修正點】：讀取「訂單追蹤」中原本就有的資料，並與新訂單合併
-            try:
-                df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            except:
-                df_track_existing = pd.DataFrame()
+            # 讀取並合併追蹤表
+            try: df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            except: df_track_existing = pd.DataFrame()
 
-            df_sales_new_batch = pd.DataFrame(rows)
-            # 強制補上單引號保護編號
-            df_sales_new_batch['訂單編號'] = df_sales_new_batch['訂單編號'].apply(lambda x: f"'{x}")
+            df_new_batch = pd.DataFrame(rows)
+            df_new_batch['訂單編號'] = df_new_batch['訂單編號'].apply(lambda x: f"'{x}")
+            df_track_combined = pd.concat([df_track_existing, df_new_batch], ignore_index=True)
 
-            # 合併新舊追蹤資料
-            df_track_combined = pd.concat([df_track_existing, df_sales_new_batch], ignore_index=True)
-
-            # 確保欄位順序正確
-            excel_columns_order = ["訂單編號", "日期", "買家名稱", "交易平台", "寄送方式", "取貨地點",
-                                  "商品名稱", "數量", "單價(售)", "單價(進)", "總銷售額", "總成本", 
-                                  "分攤手續費", "扣費項目", "總淨利", "毛利率", "稅額"]
-            df_track_combined = df_track_combined[excel_columns_order]
-
-            # 4. 調用全能存檔引擎：一次更新商品與追蹤表，保護其他分頁
-            save_success = self._universal_save({
+            # 存檔
+            if self._universal_save({
                 SHEET_PRODUCTS: df_prods_current, 
                 SHEET_TRACKING: df_track_combined
-            })
-
-            if save_success:
+            }):
                 self.products_df = df_prods_current
                 self.update_sales_prod_list()
-                self.update_mgmt_prod_list()
                 self.load_tracking_data() 
-                messagebox.showinfo("成功", f"訂單 {order_id} 已成功加入追蹤區！")
+                messagebox.showinfo("成功", f"訂單 {order_id} 已高精度核算並送出。")
 
-                # 清空介面
-                self.cart_data = []
+                # 重置 UI
+                self.cart_data = []; self.var_cust_name.set(""); self.var_extra_fee.set(0.0)
                 for i in self.tree.get_children(): self.tree.delete(i)
                 self.update_totals()
-                self.var_cust_name.set(""); self.var_cust_loc.set(""); self.var_sel_stock_info.set("--")
 
         except Exception as e: 
-            messagebox.showerror("錯誤", f"發生未預期錯誤: {str(e)}")
+            messagebox.showerror("錯誤", f"存檔失敗: {str(e)}")
 
     def update_mgmt_prod_list(self):
         """ 及時更新商品管理清單 (過濾關鍵字) """
