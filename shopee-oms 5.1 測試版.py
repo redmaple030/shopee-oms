@@ -17,13 +17,11 @@ from decimal import Decimal, ROUND_HALF_UP
 
 
 
-
-
 # 1. 匯入敏感資料
 try:
     from secrets_config import SECRET_SALT, AUTH_FILE, RESCUE_SALT
 except ImportError:
-    print("⚠️ 警告：找不到 secrets_config.py,系統將使用預設安全設定運行。")
+    print("⚠️ warning: secrets_config.py not found, system will use default security settings.")
     SECRET_SALT = "DEMO_SALT_FOR_OPENSOURCE"
     AUTH_FILE = "sys_config.bin"
     RESCUE_SALT = "RESCUE_DEMO_SALT" # <--- 補上這行確保 get_rescue_password 不會崩潰
@@ -179,7 +177,7 @@ class GoogleDriveSync:
             else:
                 return items[0].get('id')
         except Exception as e:
-            print(f"資料夾建立失敗: {e}")
+            print(f"system: failed to create folder: {e}")
             return None
 
     def upload_file(self, filepath):
@@ -207,13 +205,13 @@ class GoogleDriveSync:
                     file_id = old_file.get('id')
                     try:
                         self.service.files().delete(fileId=file_id).execute()
-                        print(f"自動清理舊備份: {old_file.get('name')}")
+                        print(f"system: cleaned up old backup: {old_file.get('name')}")
                     except Exception as delete_error:
-                        print(f"刪除舊檔失敗: {delete_error}")
+                        print(f"system: failed to delete old file: {delete_error}")
 
-            return True, f"備份成功！\n雲端檔名: {file_name}\n(系統已自動保留最新 20 筆紀錄)"
+            return True, f"system: backup successful!\nCloud filename: {file_name}\n(System has automatically retained the latest 20 records)"
         except Exception as e:
-            return False, f"上傳失敗: {str(e)}"
+            return False, f"system: failed to upload file: {str(e)}"
 
     def list_backups(self):
         """列出備份資料夾內的檔案"""
@@ -565,14 +563,14 @@ class SalesApp:
                 self.style.configure("TLabel", font=new_font)
                 self.style.configure("TButton", font=new_font)
 
-            print(f"系統字體已統一調整為: {new_size}")
+            print(f"system: font size updated to: {new_size}")
         except Exception as e:
-            print(f"字體調整失敗: {e}")
+            print(f"system: failed to update font size: {e}")
 
 
 
     def load_system_settings(self):
-        """ 強化版：載入店名與所有評估參數 """
+        """ 強化版：載入店名與所有評估參數 (全面防禦 NaN 錯誤) """
         try:
             if not os.path.exists(FILE_NAME): return
             df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
@@ -580,21 +578,43 @@ class SalesApp:
             # 建立對照字典
             settings = dict(zip(df_cfg['設定名稱'], df_cfg['參數值']))
             
+            # --- [新增：內部安全轉換工具] ---
+            def get_safe_num(key, default, is_int=False):
+                if key in settings:
+                    val = settings[key]
+                    # 檢查是否為空值 (Pandas 的 NaN)
+                    if pd.isna(val) or str(val).strip().lower() == 'nan':
+                        return default
+                    try:
+                        # 先轉 float 確保能處理字串 "3.0" 的情況，再視需求轉 int
+                        num = float(val)
+                        return int(num) if is_int else num
+                    except:
+                        return default
+                return default
+
             # 1. 載入店名
             if "SYSTEM_SHOP_NAME" in settings:
-                self.var_shop_name.set(settings["SYSTEM_SHOP_NAME"])
+                shop_name = settings["SYSTEM_SHOP_NAME"]
+                self.var_shop_name.set("" if pd.isna(shop_name) else str(shop_name))
             
-            # 2. 載入 KPI 參數 (若不存在則維持 __init__ 的預設值)
-            if "VENDOR_W_QUALITY" in settings: self.var_w_quality.set(float(settings["VENDOR_W_QUALITY"]))
-            if "VENDOR_W_PREP" in settings: self.var_w_prep.set(float(settings["VENDOR_W_PREP"]))
-            if "VENDOR_W_FULFILL" in settings: self.var_w_fulfill.set(float(settings["VENDOR_W_FULFILL"]))
-            if "VENDOR_W_TRANSIT" in settings: self.var_w_transit.set(float(settings["VENDOR_W_TRANSIT"]))
-            if "VENDOR_STD_PREP" in settings: self.var_std_prep.set(int(settings["VENDOR_STD_PREP"]))
-            if "VENDOR_STD_TRANSIT" in settings: self.var_std_transit.set(int(settings["VENDOR_STD_TRANSIT"]))
-            if "VENDOR_W_SYSTEM_RATIO" in settings: self.var_w_system_ratio.set(float(settings["VENDOR_W_SYSTEM_RATIO"]))
+            # 2. 使用安全工具載入 KPI 參數
+            self.var_w_quality.set(get_safe_num("VENDOR_W_QUALITY", 0.4))
+            self.var_w_prep.set(get_safe_num("VENDOR_W_PREP", 0.3))
+            self.var_w_fulfill.set(get_safe_num("VENDOR_W_FULFILL", 0.2))
+            self.var_w_transit.set(get_safe_num("VENDOR_W_TRANSIT", 0.1))
+            
+            # 天數標準必須是整數
+            self.var_std_prep.set(get_safe_num("VENDOR_STD_PREP", 3, is_int=True))
+            self.var_std_transit.set(get_safe_num("VENDOR_STD_TRANSIT", 5, is_int=True))
+            
+            self.var_w_system_ratio.set(get_safe_num("VENDOR_W_SYSTEM_RATIO", 0.8))
+
+            print("System settings loaded successfully (NaN safety check passed).")
 
         except Exception as e:
-            print(f"載入設定失敗: {e}")
+            # 使用 print 而非 messagebox，防止啟動時陷入死循環報錯
+            print(f"System settings load failed: {e}")
 
 
     def save_system_settings(self):
@@ -664,7 +684,7 @@ class SalesApp:
             # 檔案不存在：建立全新結構
             for sheet, cols in REQUIRED_STRUCTURE.items():
                 updates_needed[sheet] = pd.DataFrame(columns=cols)
-            print("系統檢測到新環境：正在建立全新資料庫...")
+            print("system detected new environment: creating fresh database...")
         else:
             # 檔案已存在：掃描每一頁，檢查是否缺漏
             try:
@@ -688,11 +708,11 @@ class SalesApp:
                                 # 為了防止誤刪除，我們要確保欄位順序對齊最新定義
                                 df_current = df_current[req_cols]
                                 updates_needed[sheet] = df_current
-                                print(f"檔案更新：分頁 [{sheet}] 自動補齊欄位: {missing_cols}")
+                                print(f"system: sheet [{sheet}] automatically filled missing columns: {missing_cols}")
                         else:
                             # 分頁不存在：建立該分頁
                             updates_needed[sheet] = pd.DataFrame(columns=req_cols)
-                            print(f"檔案更新：自動建立缺失的分頁 [{sheet}]")
+                            print(f"file update: automatically created missing sheet [{sheet}]")
                             
             except Exception as e:
                 messagebox.showerror("掃描失敗", f"讀取 Excel 時出錯: {e}")
@@ -704,7 +724,7 @@ class SalesApp:
             # 這樣可以 100% 確保沒被改動的頁面（例如妳沒去動的銷售紀錄）不會消失
             save_success = self._universal_save(updates_needed)
             if save_success:
-                print("Excel 資料結構校準成功。")
+                print("Excel data structure calibrated successfully.")
 
 
                 
@@ -744,7 +764,7 @@ class SalesApp:
             return df
             
         except Exception as e:
-            print(f"載入商品失敗: {e}")
+            print(f"system: failed to load products: {e}")
             return pd.DataFrame(columns=["分類Tag", "商品名稱", "預設成本", "目前庫存", "最後更新時間"])
 
     def create_tabs(self):
@@ -1047,7 +1067,7 @@ class SalesApp:
                     display_text = f"{name} ({channel})" if channel else name
                     self.list_pur_v.insert(tk.END, display_text)
         except Exception as e:
-            print(f"進貨分頁讀取廠商失敗: {e}")
+            print(f"system: failed to load suppliers: {e}")
 
 
     def on_pur_supplier_select(self, event):
@@ -1174,11 +1194,16 @@ class SalesApp:
         if hasattr(self, 'lbl_pur_total'):
             self.lbl_pur_total.config(text=f"本次進貨總額: ${total_sum:,.0f}")
             
-        print("已從暫存清單移除商品")
+        print("system: removed item from temporary list")
 
 
     def load_purchase_tracking(self):
-        """ 載入追蹤清單：強制處理 NaN 防止顯示 nan """
+        """ 
+        載入追蹤清單：
+        1. 強力防止 NaN 導致的轉型崩潰
+        2. 自動清理物流單號的 .0 
+        3. 統一數值顯示格式 (預防未來格式錯誤)
+        """
         for i in self.tree_pur_track.get_children(): 
             self.tree_pur_track.delete(i)
             
@@ -1188,34 +1213,53 @@ class SalesApp:
             
             if df.empty: return
 
-            # --- 核心修正：將所有欄位先填補空值，防止 nan 出現 ---
-            df = df.fillna("")
-
-            # 強制將物流追蹤轉為字串，並去掉可能的 .0
-            if '物流追蹤' in df.columns:
-                df['物流追蹤'] = df['物流追蹤'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x)
-                df['物流追蹤'] = df['物流追蹤'].replace(['nan', 'NaN', 'None'], '')
+            # --- [預防性數據清洗] ---
+            # 將常見的空值表示符統一轉換為 Pandas 可辨識的空值，再統一填補
+            df = df.replace(['nan', 'NaN', 'None', 'None', 'null'], pd.NA)
 
             for idx, row in df.iterrows():
-                # 確保數字欄位格式漂亮
-                def to_f(val):
-                    try: return f"{float(val):.1f}"
-                    except: return "0.0"
+                
+                # A. 數量安全處理 (解決 NaN to Integer 報錯的關鍵)
+                # 使用 pd.to_numeric 強制轉換，不成功的會變成 NaN，再用 fillna(0) 補 0
+                raw_qty = row.get('數量', 0)
+                safe_qty = int(pd.to_numeric(raw_qty, errors='coerce')) if pd.notna(pd.to_numeric(raw_qty, errors='coerce')) else 0
 
+                # B. 財務數值安全處理 (單價、稅額、運費)
+                def to_f_clean(val):
+                    n = pd.to_numeric(val, errors='coerce')
+                    return f"{float(n):.1f}" if pd.notna(n) else "0.0"
+
+                # C. 物流單號安全處理 (徹底消滅 .0 與 nan)
+                track_no = str(row.get('物流追蹤', '')).strip()
+                if track_no.endswith('.0'):
+                    track_no = track_no[:-2]
+                if track_no.lower() in ['nan', 'none', '', 'nat']:
+                    track_no = ""
+
+                # D. 物流狀態處理
+                status = str(row.get('物流狀態', '')).strip()
+                if status.lower() in ['nan', 'none', '']:
+                    status = "待發貨"
+
+                # E. 進貨單號處理 (移除單引號顯示)
+                pur_id = str(row.get('進貨單號', '')).replace("'", "").strip()
+
+                # 寫入介面
                 self.tree_pur_track.insert("", "end", text=str(idx), values=(
-                    str(row.get('進貨單號', '')).replace("'", ""),
+                    pur_id,
                     row.get('供應商', ''),
                     row.get('商品名稱', ''),
-                    row.get('數量', 0),
-                    to_f(row.get('進貨單價', 0)),
-                    to_f(row.get('海關稅金', 0)),
-                    to_f(row.get('分攤運費', 0)),
-                    row.get('物流狀態', '待發貨'), # 狀態
-                    row.get('物流追蹤', '')      # 單號
+                    safe_qty,                  # 已修正的數量
+                    to_f_clean(row.get('進貨單價', 0)),
+                    to_f_clean(row.get('海關稅金', 0)),
+                    to_f_clean(row.get('分攤運費', 0)),
+                    status,                    # 已修正的狀態
+                    track_no                   # 已修正的單號
                 ))
         except Exception as e:
-            print(f"載入失敗: {e}")
-
+            import traceback
+            traceback.print_exc()
+            print(f"system: failed to load purchase tracking: {e}")
 
     def setup_pur_tracking_tab(self):
         """ 建立在途貨物追蹤：將狀態與單號拆分為獨立欄位 """
@@ -1505,7 +1549,7 @@ class SalesApp:
             self.refresh_vendor_live_score(v_name_selected)
 
         except Exception as e:
-            print(f"讀取廠商詳情失敗: {e}")
+            print(f"system: failed to load vendor details: {e}")
 
 
     def refresh_vendor_live_score(self, vendor_name):
@@ -1628,10 +1672,10 @@ class SalesApp:
             
             if changed:
                 self._universal_save({SHEET_SYS_SETTINGS: df_sys})
-                print("KPI 預設參數已初始化。")
+                print("system: KPI default parameters initialized.")
         except Exception as e:
-            print(f"初始化 KPI 參數失敗: {e}")
-    
+            print(f"system: failed to initialize KPI parameters: {e}")
+
 
 
     def submit_vendor(self):
@@ -2128,7 +2172,7 @@ class SalesApp:
                 ), tags=(tag,))
                 
         except Exception as e:
-            print(f"採購建議計算錯誤: {e}")
+            print(f"system: procurement recommendation calculation error: {e}")
 
     # ================= 備份還原頁面 =================
     def setup_backup_tab(self):
@@ -2306,7 +2350,7 @@ class SalesApp:
                     self.btn_refresh.config(state="normal")
                     self.lbl_auth_status.config(text="狀態: ✅ 系統就緒 (已連結 Google)", foreground="green")
         except Exception as e:
-            print(f"授權讀取失敗: {e}")
+            print(f"system: failed to read license: {e}")
 
     # --- 執行緒相關函數 ---
     def start_login_thread(self):
@@ -2939,7 +2983,7 @@ class SalesApp:
                 ))
                 
         except Exception as e:
-            print(f"載入追蹤清單失敗: {e}")
+            print(f"system: failed to load tracking list: {e}")
 
     def action_track_modify(self):
         """ 修改資料: 跳出視窗修改數量與價格 """
@@ -3147,8 +3191,8 @@ class SalesApp:
                     row.get('備註', '') # 對應 Excel Q 列的內容
                 ))
         except Exception as e:
-            print(f"讀取退貨紀錄失敗: {e}")
-    
+            print(f"system: failed to load returns data: {e}")
+
     #================= 銷售紀錄 =================
     def setup_sales_edit_tab(self):
         main_paned = ttk.PanedWindow(self.tab_sales_edit, orient=tk.VERTICAL)
@@ -3314,7 +3358,7 @@ class SalesApp:
                     p_idx = p_idx_list[0]
                     old_stock = df_prods.at[p_idx, '目前庫存']
                     df_prods.at[p_idx, '目前庫存'] = old_stock - 1 # 預設補寄 1 個
-                    print(f"售後扣庫存：{prod_name} 由 {old_stock} -> {old_stock-1}")
+                    print(f"system: deducted inventory for after-sales: {prod_name} from {old_stock} to {old_stock-1}")
 
             # 4. 調用萬用引擎一次性儲存 (確保資料一致性)
             save_dict = {
@@ -3392,7 +3436,7 @@ class SalesApp:
                     display_date, display_buyer, item_name, qty, price, fee, profit, margin
                 ))
         except Exception as e:
-            print(f"讀取歷史列表失敗: {e}")
+            print(f"system: failed to load historical list: {e}")
 
 
     def on_sales_edit_select(self, event):
@@ -3422,7 +3466,7 @@ class SalesApp:
                 self.var_view_after_status.set(current_after_note)
             
         except Exception as e:
-            print(f"讀取詳情失敗: {e}")
+            print(f"system: failed to load details: {e}")
 
 
     def save_sales_edit(self):
@@ -3779,9 +3823,9 @@ class SalesApp:
             data["remember"] = self.var_auto_login.get()
             with open(AUTH_FILE, "w") as f:
                 json.dump(data, f)
-            print(f"自動登入已設置為: {data['remember']}")
+            print(f"system: auto-login set to: {data['remember']}")
         except Exception as e:
-            messagebox.showerror("錯誤", f"無法儲存安全性設定: {e}")
+            messagebox.showerror("錯誤", f"system: failed to save security settings: {e}")
 
 
 
@@ -3813,7 +3857,7 @@ class SalesApp:
             if hasattr(self, 'combo_fee_rate'):
                 self.combo_fee_rate['values'] = fee_options
         except Exception as e:
-            print(f"費率載入錯誤: {e}")
+            print(f"system: failed to load fee rates: {e}")
 
     def action_add_custom_fee(self):
         #""" 新增或更新自訂費率 (修正版：解決 df 變數未定義問題) """
@@ -3934,12 +3978,12 @@ class SalesApp:
             if success:
                 # 更新成功後，重新整理 UI 下拉選單與表格
                 self.refresh_fee_tree()
-                print("手續費設定儲存成功。")
+                print("system: fee settings saved successfully.")
             else:
                 # 失敗時 (例如 Excel 沒關)，_universal_save 內部已經會跳出 messagebox 提示
-                print("手續費設定儲存失敗。")
+                print("system: failed to save fee settings.")
         except Exception as e:
-            messagebox.showerror("錯誤", f"儲存過程出錯: {str(e)}")
+            messagebox.showerror("錯誤", f"system: error occurred while saving settings: {str(e)}")
 
 
     def setup_about_us_tab(self):
@@ -4174,7 +4218,7 @@ class SalesApp:
                     # 呼叫效能更新引擎
                     self.update_vendor_performance(vendor_name)
                 except Exception as ve:
-                    print(f"廠商效能更新觸發失敗: {ve}")
+                    print(f"system: failed to update vendor performance: {ve}")
                 # ------------------------------------------------
 
                 messagebox.showinfo("成功", f"單號 [{target_pur_id}] 及其商品已全數入庫。")
@@ -4271,10 +4315,10 @@ class SalesApp:
                 self._universal_save({SHEET_VENDORS: df_v})
 
                 if self._universal_save({SHEET_VENDORS: df_v}):
-                    print(f"系統訊息：廠商 {vendor_name} 績效已更新 (Score: {final_score})")
+                    print(f"system: vendor performance updated (Score: {final_score})")
 
         except Exception as e:
-            print(f"自動更新廠商分析失敗: {e}")
+            print(f"system: failed to update vendor analysis: {e}")
             import traceback
             traceback.print_exc()
 
@@ -4750,7 +4794,8 @@ class SalesApp:
             })
         
             if success:
-                messagebox.showinfo("成功", f"訂單 {order_id} 結案成功！全表已重新自動校準與美化。")
+                messagebox.showinfo("成功", f"訂單 {order_id} 結案成功！全表已重新自動校準。")
+                print(f"system: order {order_id} marked as completed and sales data re-aligned.")
                 self.load_tracking_data()
                 self.calculate_analysis_data()
                 
@@ -5037,7 +5082,7 @@ class SalesApp:
             # 回傳 Decimal 供 submit_order 分攤使用
             return t_sales, platform_fee, Decimal("0.00")
         except Exception as e:
-            print(f"銷售計算出錯: {e}")
+            print(f"system: failed to calculate sales: {e}")
             return Decimal("0"), Decimal("0"), Decimal("0")
         
     
@@ -5216,7 +5261,7 @@ class SalesApp:
             # 在後台印出錯誤細節，方便除錯
             import traceback
             traceback.print_exc()
-            print(f"商品選取顯示失敗: {e}")
+            print(f"system: failed to display selected product: {e}")
 
     def submit_new_product(self):
         """ 建立新商品：加入重複名稱檢查與資料保護邏輯 """
@@ -5322,7 +5367,7 @@ class SalesApp:
 
                 if new_stock > old_stock:
                     df_prods.loc[idx, '最後進貨時間'] = now_str
-                    print(f"檢測到商品 {name} 補貨，更新進貨時間。")
+                    print(f"system: detected restock for product {name}, updated restock time.")
                 
                 # --- [更新資料列] ---
                 df_prods.loc[idx, '商品編號'] = self.var_upd_sku.get()
@@ -5406,4 +5451,5 @@ if __name__ == "__main__":
 #         pass 
 #     app = SalesApp(root)
 #     root.mainloop()
+
 
