@@ -3,7 +3,7 @@
 
 **針對 2026 蝦皮手續費新制開發，堅持「資料落地」的輕量級 ERP 解決方案。**
 
-![image] (https://github.com/redmaple030/shopee-oms/blob/main/setup)
+![image](https://github.com/redmaple030/shopee-oms/blob/main/setup)
 
 
 當前版本：5.1
