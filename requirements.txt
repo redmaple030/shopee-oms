@@ -1,0 +1,19 @@
+# --- 資料處理與 Excel 核心 (Data Engine) ---
+pandas==3.0.0
+openpyxl==3.1.5
+numpy==2.4.1
+
+# --- Google Drive API 雲端備份 (Cloud Integration) ---
+google-api-python-client==2.188.0
+google-auth-oauthlib==1.2.4
+google-auth-httplib2==0.3.0
+
+# --- 網路請求與自動化追蹤 (Networking & Scraping) ---
+requests==2.32.5
+selenium==4.38.0
+
+# --- 進階 UI 組件 (User Interface) ---
+tksheet==7.5.19
+
+# --- 部署與打包工具 (Build Tools) ---
+pyinstaller==6.17.0
