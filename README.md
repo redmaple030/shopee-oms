@@ -1,4 +1,5 @@
-# 🛒 蝦皮/網拍專用進銷存管理系統 (Shopee OMS Local-First)
+
+# 🛒 蝦皮/網拍專用進銷存管理系統 (Shopee-OMS Local-First)
 
 **針對 2026 蝦皮手續費新制開發，堅持「資料落地」的輕量級 ERP 解決方案。**
 
@@ -129,63 +130,50 @@ google雲端備份及還原功能 以測試完成(付費解鎖)
 
 
 ## 📖 專案背景 (Project Background)
+隨著電商平台手續費結構日益複雜，加上雲端服務存在帳號停權及資安疑慮，本專案旨在提供一套 **「本地優先 (Local-First)」** 的管理工具。結合 Python 高效數據處理能力與 Google Drive API，達成「資料個人掌握，備份雲端同步」的混合架構。
 
-隨著 2026 年各大電商平台手續費結構調整，加上雲端服務的不確定性（帳號停權、資安疑慮），許多微型賣家面臨數位轉型的兩難。
+---
 
-本專案旨在開發一套 **「本地優先 (Local-First)」** 的進銷存系統，結合 **Python 強大的數據處理能力** 與 **Google Drive API 雲端備份**，讓賣家既能擁有傳統軟體的資料掌控權，又能享有現代化的雲端備份便利性。
+## ✨ 核心技術亮點 (Technical Highlights)
 
-## ✨ 核心功能 (Key Features)
+### 1. 🛡️ 數據完整性與安全 (Data Integrity)
+*   **萬用存檔引擎 (Universal Save Engine)**：自主開發原子化寫入邏輯，確保在多分頁 Excel 環境下更新單一數據時，其餘業務資料（如歷史銷售、廠商主檔）不遺失。
+*   **SHA-256 憑證加密**：系統存取控制與授權碼採用 SHA-256 加上動態鹽值 (Salt)，確保靜態資料 (Data-at-Rest) 的安全性。
 
-### 1. 🛡️ 資料主權與安全性
-- **本地運算**：所有銷售數據皆儲存於本地 Excel/Database，不依賴第三方伺服器，斷網亦可操作。
-- **混合雲備份**：整合 Google Drive API，透過 OAuth2 驗證，一鍵將加密資料備份至個人雲端硬碟。
+### 2. 📈 高精度財務運算引擎
+*   **消除浮點數誤差**：全系統導入 `decimal` 模組，採用 **ROUND_HALF_UP (會計四捨五入)** 演算法，確保在處理大宗採購與手續費分攤時，數據精確至角分。
 
-### 2. ⚡ 針對電商優化的 UX 設計
-- **自動計算**：內建 2026 年最新手續費費率（含促銷檔期/商城費率），自動計算毛利。
-- **庫存防呆**：即時庫存扣除邏輯，防止超賣。
-- **長輩友善**：支援介面字體動態縮放 (10pt - 20pt)，自動調整表格行高。
+### 3. 🚚 供應鏈決策支援 (SCM Support)
+*   **動態績效評鑑 (KPI)**：基於 **SCOR 模型** 簡化而來的評分演算法，自動計算廠商的「到貨滿足率」、「備貨時效」及「品質合格率」。
+*   **採購預測**：結合 **銷售速率 (Velocity)** 與 **前置時間 (Lead Time)**，實作自動補貨點 (ROP) 試算。
 
-### 3. 🔐 VIP 授權機制 (商業化模組)
-- **Hash 驗證**：採用 MD5 演算法結合 Salt 進行軟體授權驗證。
-- **雙重控管**：結合「軟體啟用碼」與「Google API 白名單」機制，確保付費會員權益。
-- **多執行緒優化**：將登入與備份動作移至背景執行緒 (Threading)，確保 UI 操作流暢不卡頓。
+### 4. ⚡ 使用者體驗優化 (UX)
+*   **非同步 UI 處理**：雲端同步與資料分析採用多執行緒 (Threading) 技術，防止 I/O 阻塞導致介面凍結。
+*   **高度適應性介面**：支援 10pt 至 20pt 的全域字體動態縮放，自動調整網格行高，具備無障礙操作特性。
+
+---
 
 ## 🛠️ 技術棧 (Tech Stack)
+*   **Language**: Python 3.13
+*   **Framework**: Tkinter / Ttk (Custom Layout)
+*   **Data Manipulation**: Pandas, OpenPyxl
+*   **Cloud API**: Google Drive API v3, OAuth2
+*   **Security**: Hashlib (SHA-256), JSON Web Token logic
+*   **Packaging**: PyInstaller with dynamic path resolution
 
-- **Language**: Python 3.x
-- **GUI Framework**: Tkinter / Ttk (Native Look & Feel)
-- **Data Manipulation**: Pandas (高效能數據處理)
-- **Cloud Integration**: Google Drive API v3, OAuthLib
-- **Concurrency**: Python `threading` module
-- **Security**: Hashlib (License Key Generation)
-- **Packaging**: PyInstaller
+---
 
-## 🚀 安裝與執行 (Installation)
+## 🚀 快速開始 (Quick Start)
 
-### 開發者模式 (For Developers)
-如果您希望研究原始碼或進行二次開發：
+### 開發者模式
+```bash
+# Clone 專案
+git clone https://github.com/redmaple030/shopee-oms.git
 
-1. **Clone 專案**
+### 安裝步驟
+1. 建議建立虛擬環境：`python -m venv venv`
+2. 啟動虛擬環境：`source venv/bin/activate` (Mac) 或 `venv\Scripts\activate` (Win)
+3. 一鍵安裝所有依賴：
    ```bash
-   git clone https://github.com/您的帳號/Shopee-OMS-System.git
-   cd Shopee-OMS-System
-安裝依賴
-code
-Bash
-pip install pandas openpyxl google-api-python-client google-auth-oauthlib
-設定 Google API
-請自行至 Google Cloud Console 申請 credentials.json 並放入專案根目錄。
-新增 secrets_config.py 並設定您的 SECRET_SALT。
-執行程式
-code
-Bash
-python SalesApp.py
-一般使用者 (For Users)
-本專案提供打包好的執行檔 (EXE)，無需安裝 Python 環境即可使用。
-[下載連結] (此處請放入您的試用版下載連結)
-💼 商業模式 (Business Model)
-本軟體採用 Freemium (免費增值) 模式：
-社群版：開源免費，支援基本進銷存功能。
-VIP 專業版：採買斷制，解鎖「一鍵雲端備份」與「無限筆數」功能。
-⚠️ 免責聲明 (Disclaimer)
-本軟體為個人開發作品，僅供輔助使用。開發者不對因軟體錯誤或資料遺失造成的商業損失負責，請務必定期手動備份重要資料。
+   pip install -r requirements.txt
+
