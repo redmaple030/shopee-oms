@@ -19,12 +19,13 @@ from decimal import Decimal, ROUND_HALF_UP
 
 # 1. 匯入敏感資料
 try:
-    from secrets_config import SECRET_SALT, AUTH_FILE, RESCUE_SALT
+    from secrets_config import SECRET_SALT, AUTH_FILE, RESCUE_SALT, RESCUE_ACCOUNT
 except ImportError:
-    print("⚠️ warning: secrets_config.py not found, system will use default security settings.")
-    SECRET_SALT = "DEMO_SALT_FOR_OPENSOURCE"
+    print("ℹ️ 系統提示：未偵測到自定義設定檔，將以『預覽模式』啟動 (使用預設安全參數)。")
+    SECRET_SALT = "PUBLIC_DEMO_SALT_2026"
     AUTH_FILE = "sys_config.bin"
-    RESCUE_SALT = "RESCUE_DEMO_SALT" # <--- 補上這行確保 get_rescue_password 不會崩潰
+    RESCUE_SALT = "RESCUE_DEMO_SALT"
+    RESCUE_ACCOUNT = "RESCUE_ADMIN"
 
 
 # 2. 加入這段函式：用來處理打包後的資源路徑
@@ -212,7 +213,6 @@ class GoogleDriveSync:
             return True, f"系統備份成功\n 雲端檔案: {file_name}\n(系統已自動管理備份數量(最多保留20筆))"
         except Exception as e:
             return False, f"system: failed to upload file: {str(e)}"
-
 
     def list_backups(self):
         """列出備份資料夾內的檔案"""
@@ -447,6 +447,8 @@ class SalesApp:
 
         #--- [新增：廠商評估 KPI 參數變數] ---
         # 權重類 (加總應為 1.0)
+        self.var_enable_vendor_kpi = tk.BooleanVar(value=True) # 預設開啟
+
         self.var_w_quality = tk.DoubleVar(value=0.4)   # 品質合格率權重
         self.var_w_prep = tk.DoubleVar(value=0.3)      # 備貨時效權重
         self.var_w_fulfill = tk.DoubleVar(value=0.2)   # 到貨滿足率權重
@@ -594,11 +596,17 @@ class SalesApp:
                         return default
                 return default
 
-            # 1. 載入店名
+            # 1-1. 載入店名
             if "SYSTEM_SHOP_NAME" in settings:
                 shop_name = settings["SYSTEM_SHOP_NAME"]
                 self.var_shop_name.set("" if pd.isna(shop_name) else str(shop_name))
-            
+
+            # 1-2 載入 KPI 開關 (預設開啟)
+            if "VENDOR_ENABLE_KPI" in settings:
+                # 讀取字串並轉回 Boolean
+                val = str(settings["VENDOR_ENABLE_KPI"]).lower() == "true"
+                self.var_enable_vendor_kpi.set(val)
+                    
             # 2. 使用安全工具載入 KPI 參數
             self.var_w_quality.set(get_safe_num("VENDOR_W_QUALITY", 0.4))
             self.var_w_prep.set(get_safe_num("VENDOR_W_PREP", 0.3))
@@ -906,6 +914,8 @@ class SalesApp:
         btn_area = ttk.Frame(right_frame)
         btn_area.pack(fill="x", pady=10)
         ttk.Button(btn_area, text="➖ 移除選中項目", command=self.remove_from_pur_cart).pack(side="left", padx=5)
+        ttk.Button(btn_area, text="🔼 上移", command=self.move_pur_item_up).pack(side="left", padx=5)
+        ttk.Button(btn_area, text="🔽 下移", command=self.move_pur_item_down).pack(side="left", padx=5)
         ttk.Button(btn_area, text="🚀 送出整單採購", command=self.submit_purchase_batch).pack(side="right", padx=5)
 
         self.update_pur_supplier_list()
@@ -1022,6 +1032,39 @@ class SalesApp:
         win.bind("<Return>", confirm_edit) # 綁定鍵盤 Enter
 
 
+    def move_pur_item_up(self):
+        """ 將採購清單中的選中項目上移 """
+        leaves = self.tree_pur_cart.selection()
+        if not leaves: return
+        
+        for item in leaves:
+            # 取得目前的視覺索引
+            idx = self.tree_pur_cart.index(item)
+            if idx > 0:
+                # 1. 移動視覺位置
+                self.tree_pur_cart.move(item, '', idx - 1)
+                
+                # 2. 同步移動後台 pur_cart_data 列表的資料
+                # 簡單的列表元素對調
+                self.pur_cart_data[idx], self.pur_cart_data[idx-1] = \
+                    self.pur_cart_data[idx-1], self.pur_cart_data[idx]
+
+    def move_pur_item_down(self):
+        """ 將採購清單中的選中項目下移 """
+        leaves = self.tree_pur_cart.selection()
+        if not leaves: return
+        
+        # 下移需要倒著處理，防止索引跑掉
+        for item in reversed(leaves):
+            idx = self.tree_pur_cart.index(item)
+            # 判斷是否已經是最後一項
+            if idx < len(self.tree_pur_cart.get_children()) - 1:
+                # 1. 移動視覺位置
+                self.tree_pur_cart.move(item, '', idx + 1)
+                
+                # 2. 同步移動後台資料
+                self.pur_cart_data[idx], self.pur_cart_data[idx+1] = \
+                    self.pur_cart_data[idx+1], self.pur_cart_data[idx]
 
     def update_pur_prod_list(self):
         """ 初始化/重新載入進貨商品清單 (加入防禦性檢查) """
@@ -1450,30 +1493,25 @@ class SalesApp:
         ttk.Entry(left_f, textvariable=self.var_v_remarks).grid(row=curr, column=1, **e_opts)
         curr += 1
 
-        # 績效評分區
-        ttk.Label(left_f, text="系統績效評分:").grid(row=curr, column=0, **grid_opts)
-        ttk.Label(left_f, textvariable=self.var_v_system_score, font=("", 10, "bold"), foreground="blue").grid(row=curr, column=1, sticky="w", padx=10)
-        curr += 1
-
-        # 星等區
-        ttk.Label(left_f, text="主觀印象星等:").grid(row=curr, column=0, **grid_opts)
-        star_f = ttk.Frame(left_f)
-        star_f.grid(row=curr, column=1, sticky="w", padx=10)
+        # --- 將績效相關元件封裝在一個專屬 Frame 中 ---
+        self.perf_frame = ttk.Frame(left_f)
+        self.perf_frame.grid(row=curr, column=0, columnspan=2, sticky="ew")
+        self.perf_frame.columnconfigure(1, weight=1) # 讓內容對齊
         
-        self.combo_v_manual = ttk.Combobox(star_f, textvariable=self.var_v_manual_adj, values=["5","4","3","2","1"], width=5, state="readonly")
+        # 內部的績效評分 Label
+        ttk.Label(self.perf_frame, text="系統績效評分:").grid(row=0, column=0, sticky="w", pady=8)
+        ttk.Label(self.perf_frame, textvariable=self.var_v_system_score, font=("", 10, "bold"), foreground="blue").grid(row=0, column=1, sticky="w", padx=10)
+        
+        # 內部的星等 Combo
+        ttk.Label(self.perf_frame, text="主觀印象星等:").grid(row=1, column=0, sticky="w", pady=8)
+        star_sub_f = ttk.Frame(self.perf_frame)
+        star_sub_f.grid(row=1, column=1, sticky="w", padx=10)
+        
+        self.combo_v_manual = ttk.Combobox(star_sub_f, textvariable=self.var_v_manual_adj, values=["5","4","3","2","1"], width=5, state="readonly")
         self.combo_v_manual.pack(side="left")
-        self.combo_v_manual.bind("<<ComboboxSelected>>", lambda e: self.refresh_vendor_live_score(self.var_v_name.get()))
-        ttk.Label(star_f, text="(針對溝通、包裝、態度打分)", foreground="gray", font=("", 9)).pack(side="left", padx=10)
-        curr += 1
-
-        # --- 底部按鈕區 (解決重疊關鍵) ---
-        # 1. 加上一點空白 Row 作為緩衝
-        ttk.Label(left_f, text="").grid(row=curr, column=0)
-        curr += 1
-
-        # 2. 橫線分隔
-        ttk.Separator(left_f, orient="horizontal").grid(row=curr, column=0, columnspan=2, sticky="ew", pady=20)
-        curr += 1
+        # ... (其餘代碼) ...
+        
+        curr += 1 # 這裡 Row 也要往後移
 
         # 3. 功能按鈕容器
         btn_f = ttk.Frame(left_f)
@@ -1504,6 +1542,19 @@ class SalesApp:
         self.list_vendors.bind('<<ListboxSelect>>', self.on_vendor_select)
 
         self.update_vendor_list()
+
+
+    def refresh_vendor_management_ui(self):
+        """ 根據開關，動態隱藏或顯示廠商管理的績效區塊 """
+        if not hasattr(self, 'perf_frame'): return
+        
+        if self.var_enable_vendor_kpi.get():
+            # 重新顯示
+            self.perf_frame.grid()
+        else:
+            # 隱藏 (grid_remove 會保留位置但看不到，grid_forget 會徹底移除空間)
+            self.perf_frame.grid_remove()
+
 
     def update_vendor_list(self):
         """ 刷新廠商清單 """
@@ -1655,6 +1706,7 @@ class SalesApp:
             
             # 定義預設清單 (Key: Value)
             defaults = {
+                "VENDOR_ENABLE_KPI": "True", # 加入這行以啟用 KPI 功能
                 "VENDOR_W_QUALITY": "0.4",
                 "VENDOR_W_PREP": "0.3",
                 "VENDOR_W_FULFILL": "0.2",
@@ -2547,7 +2599,13 @@ class SalesApp:
         self.tree.column("總計", width=70, anchor="e")
         self.tree.pack(fill="both", expand=True)
 
-        ttk.Button(right_frame, text="(x) 移除", command=self.remove_from_cart).pack(anchor="e", pady=2)
+
+        sales_btn_f = ttk.Frame(right_frame)
+        sales_btn_f.pack(fill="x", pady=2)
+
+        ttk.Button(sales_btn_f, text="🔼 排序上移", command=self.move_sales_item_up).pack(side="left", padx=2)
+        ttk.Button(sales_btn_f, text="🔽 排序下移", command=self.move_sales_item_down).pack(side="left", padx=2)
+        ttk.Button(sales_btn_f, text="(x) 移除", command=self.remove_from_cart).pack(side="right", padx=10)
 
         fee_frame = ttk.LabelFrame(right_frame, text="費用與折扣", padding=10)
         fee_frame.pack(fill="x", pady=5)
@@ -2623,6 +2681,38 @@ class SalesApp:
         ttk.Button(sum_frame, text="✔ 送出訂單", command=self.submit_order).pack(fill="x", pady=5)
 
         self.refresh_fee_tree()
+
+    def move_sales_item_up(self):
+        """ 將銷售清單中的選中項目上移 """
+        selected = self.tree.selection()
+        if not selected: return
+        
+        for item in selected:
+            idx = self.tree.index(item)
+            if idx > 0:
+                # 1. 移動 Treeview 視覺位置
+                self.tree.move(item, '', idx - 1)
+                
+                # 2. 同步移動後台 cart_data 列表
+                self.cart_data[idx], self.cart_data[idx-1] = \
+                    self.cart_data[idx-1], self.cart_data[idx]
+
+    def move_sales_item_down(self):
+        """ 將銷售清單中的選中項目下移 """
+        selected = self.tree.selection()
+        if not selected: return
+        
+        # 下移要倒著處理，防止索引位移問題
+        for item in reversed(selected):
+            idx = self.tree.index(item)
+            if idx < len(self.tree.get_children()) - 1:
+                # 1. 移動 Treeview 視覺位置
+                self.tree.move(item, '', idx + 1)
+                
+                # 2. 同步移動後台資料
+                self.cart_data[idx], self.cart_data[idx+1] = \
+                    self.cart_data[idx+1], self.cart_data[idx]
+
 
 
     def export_shipping_note(self):
@@ -3666,46 +3756,65 @@ class SalesApp:
         ttk.Label(bypass_f, text="* 勾選後下次啟動將跳過登入視窗", foreground="gray", font=("", 9)).pack(side="left", padx=20)
 
         #--- 第四區補充：廠商績效評估參數設定 ---
-        vendor_kpi_f = ttk.LabelFrame(main_frame, text="📊 廠商績效評估參數 (自定義權重與標準)", padding=15)
+        vendor_kpi_f = ttk.LabelFrame(main_frame, text="📊 廠商績效評估設定", padding=15)
         vendor_kpi_f.pack(fill="x", pady=5)
 
-        # 使用子容器來排版
+        # 功能總開關
+        chk_master = ttk.Checkbutton(vendor_kpi_f, text="啟用廠商自動績效評估功能", 
+                                     variable=self.var_enable_vendor_kpi,
+                                     command=self.toggle_vendor_kpi_ui)
+        chk_master.pack(anchor="w", pady=(0, 10))
+
+        # 容器
         kpi_grid = ttk.Frame(vendor_kpi_f)
         kpi_grid.pack(fill="x")
+        self.kpi_entries = [] # 重新初始化清單
+        self.kpi_labels = []  # 建議也存標籤，讓它們一起變灰色更專業
 
-        # 設定 Grid 欄位權重
+        # 設定欄位權重
         for i in range(4): kpi_grid.columnconfigure(i, weight=1)
 
-        # --- 第 1 排：權重設定 (加總建議為 1.0) ---
-        ttk.Label(kpi_grid, text="品質權重:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_w_quality, width=8).grid(row=0, column=1, sticky="w")
+        # 輔助函式：快速建立標籤與輸入框並加入追蹤
+        def add_kpi_field(row, col, text, var):
+            lbl = ttk.Label(kpi_grid, text=text)
+            lbl.grid(row=row, column=col*2, sticky="e", padx=5, pady=5)
+            ent = ttk.Entry(kpi_grid, textvariable=var, width=8)
+            ent.grid(row=row, column=col*2+1, sticky="w")
+            self.kpi_labels.append(lbl)
+            self.kpi_entries.append(ent)
 
-        ttk.Label(kpi_grid, text="備貨權重:").grid(row=0, column=2, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_w_prep, width=8).grid(row=0, column=3, sticky="w")
+        # 第一排
+        add_kpi_field(0, 0, "品質權重:", self.var_w_quality)
+        add_kpi_field(0, 1, "備貨權重:", self.var_w_prep)
 
-        # --- 第 2 排：權重設定 ---
-        ttk.Label(kpi_grid, text="滿足率權重:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_w_fulfill, width=8).grid(row=1, column=1, sticky="w")
+        # 第二排
+        add_kpi_field(1, 0, "滿足率權重:", self.var_w_fulfill)
+        add_kpi_field(1, 1, "運輸權重:", self.var_w_transit)
 
-        ttk.Label(kpi_grid, text="運輸權重:").grid(row=1, column=2, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_w_transit, width=8).grid(row=1, column=3, sticky="w")
+        # 第三排
+        add_kpi_field(2, 0, "備貨標準(天):", self.var_std_prep)
+        add_kpi_field(2, 1, "運輸標準(天):", self.var_std_transit)
 
-        # --- 第 3 排：扣分標準 (天數) ---
-        ttk.Label(kpi_grid, text="備貨標準(天):").grid(row=2, column=0, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_std_prep, width=8).grid(row=2, column=1, sticky="w")
+        # 第四排
+        # 標籤
+        lbl_ratio = ttk.Label(kpi_grid, text="系統數據佔比:")
+        lbl_ratio.grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        self.kpi_labels.append(lbl_ratio)
+        
+        # 輸入框
+        ent_ratio = ttk.Entry(kpi_grid, textvariable=self.var_w_system_ratio, width=8)
+        ent_ratio.grid(row=3, column=1, sticky="w")
+        self.kpi_entries.append(ent_ratio) # 補上這一行，解決它沒被禁用的問題
 
-        ttk.Label(kpi_grid, text="運輸標準(天):").grid(row=2, column=2, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_std_transit, width=8).grid(row=2, column=3, sticky="w")
+        # 儲存按鈕
+        self.btn_save_kpi_ctrl = ttk.Button(kpi_grid, text="💾 儲存評分參數", command=self.save_vendor_kpi_settings, width=15)
+        self.btn_save_kpi_ctrl.grid(row=3, column=2, columnspan=2, sticky="w", padx=20)
 
-        # --- 第 4 排：混合比例與儲存按鈕 ---
-        ttk.Label(kpi_grid, text="系統數據佔比:").grid(row=3, column=0, sticky="e", padx=5, pady=5)
-        ttk.Entry(kpi_grid, textvariable=self.var_w_system_ratio, width=8).grid(row=3, column=1, sticky="w")
-
-        btn_save_kpi = ttk.Button(kpi_grid, text="💾 儲存評分參數", command=self.save_vendor_kpi_settings, width=15)
-        btn_save_kpi.grid(row=3, column=2, columnspan=2, sticky="w", padx=20)
-
-        ttk.Label(vendor_kpi_f, text="* 權重建議：四項權重加總應為 1.0 (例如 0.4+0.3+0.2+0.1)。系統數據佔比 0.8 代表人為星等佔 0.2。", 
+        ttk.Label(vendor_kpi_f, text="* 權重建議：四項權重加總應為 1.0。系統數據佔比 0.8 代表人為星等佔 0.2。", 
                   foreground="gray", font=("", 9)).pack(anchor="w", pady=(5,0))
+        
+        # 立即更新一次介面狀態
+        self.toggle_vendor_kpi_ui()
 
         # --- 第五區：商品欄位顯示 ---
         field_cfg_frame = ttk.LabelFrame(main_frame, text="👁️ 商品資料欄位顯示", padding=15)
@@ -3723,7 +3832,7 @@ class SalesApp:
 
     def save_vendor_kpi_settings(self):
         """ 
-        儲存 KPI 參數 (含防呆校驗)：
+        儲存 KPI 參數 (含防呆校驗):
         1. 檢查四大權重總和是否等於 1.0
         2. 檢查數值是否在合理範圍 (0~1)
         """
@@ -3789,6 +3898,34 @@ class SalesApp:
             messagebox.showerror("輸入錯誤", "請確保所有權重皆輸入正確的數字格式！")
         except Exception as e:
             messagebox.showerror("系統錯誤", f"儲存失敗: {e}")
+
+    def toggle_vendor_kpi_ui(self):
+        """ 根據開關狀態，切換設定頁面的輸入框權限，並通知廠商頁面隱藏/顯示 """
+        is_enabled = self.var_enable_vendor_kpi.get()
+        state = "normal" if is_enabled else "disabled"
+        
+        # 1. 處理設定頁面的輸入框與按鈕
+        for entry in self.kpi_entries:
+            entry.config(state=state)
+        self.btn_save_kpi_ctrl.config(state=state)
+
+        # 2. 通知廠商管理頁面進行更新 (稍後在第三階段實作)
+        if hasattr(self, 'refresh_vendor_management_ui'):
+            self.refresh_vendor_management_ui()
+            
+        # 同步儲存至 Excel 防止忘記按儲存
+        self.save_vendor_kpi_master_switch()
+
+    def save_vendor_kpi_master_switch(self):
+        """ 獨立儲存開關狀態 """
+        try:
+            df_sys = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
+            val = str(self.var_enable_vendor_kpi.get())
+            if "VENDOR_ENABLE_KPI" in df_sys['設定名稱'].values:
+                df_sys.loc[df_sys['設定名稱'] == "VENDOR_ENABLE_KPI", '參數值'] = val
+                self._universal_save({SHEET_SYS_SETTINGS: df_sys})
+        except: pass
+
 
 
     def update_system_auth(self):
@@ -4015,12 +4152,11 @@ class SalesApp:
         left_box.pack(side="left", fill="both", expand=True, padx=10)
         
         features = [
-            "● 全自動加權平均成本 (WAC) 計算",
-            "● 支援內含營業稅 (5%) 自動回推",
-            "● 進貨追蹤與結案緩衝區雙重機制",
-            "● 智慧採購評估系統 (銷售速率/備貨天數)",
-            "● 歷史訂單自動日期排序與資料保護",
-            "● 支援雲端 Google Drive 自動替換備份"
+            "● 高精度財務運算引擎：導入 Decimal 模組與 ROUND_HALF_UP 會計算法，杜絕浮點數誤差。",
+            "● 供應商績效評鑑體系：實作動態 KPI 權重引擎，針對品質、備貨、滿足率及運輸時效進行量化分析。",
+            "● 智慧採購需求分析：結合商品銷售速率 (Velocity) 與前置時間 (Lead Time) 建立 ROP 補貨模型。",
+            "● 資料防禦機制：實作萬用存檔引擎 (Universal Save Engine) 與標頭繼承算法，確保數據原子性。",
+            "● 混合雲資安防護架構：整合 Google Drive API 雲端冗餘備份，並採用 SHA-256 加密認證與金鑰隔離。"
         ]
         for f in features:
             ttk.Label(left_box, text=f, font=("微軟正黑體", 11)).pack(anchor="w", pady=4)
@@ -4045,14 +4181,17 @@ class SalesApp:
         log_frame = ttk.LabelFrame(main_frame, text="📝 更新日誌", padding=10)
         log_frame.pack(fill="x", pady=20)
         
-        log_text = tk.Text(log_frame, height=5, font=("微軟正黑體", 10), bg="#F8F9FA", relief="flat")
+        log_text = tk.Text(log_frame, height=8, font=("微軟正黑體", 10), bg="#F8F9FA", relief="flat")
         log_text.pack(fill="x")
         
         logs = (
-            "[2026-02-08] V4.3: 引入採購需求分析模組、優化銷售速率計算邏輯。\n"
-            "[2026-02-05] V4.2: 進貨與銷售端同步支援『內含營業稅』回推計算。\n"
-            "[2026-02-02] V4.1: 進貨管理全面單據化，支援批次入庫與加權成本公式。\n"
-            "[2026-01-31] V4.0: 移除原生 Excel 依賴，轉向資料庫邏輯架構 (V4 Hybrid)。"
+            "[2026-03-04] V5.1: 實作動態 KPI 權重引擎、導入 Decimal 高精度財務運算、強化數據清洗管線與防呆機制。\n"
+            "[2026-03-02] V5.0: 資料儲存架構解耦重構（手續費與系統設定分離）、新增廠商資料批次匯入精靈 (Vendor Wizard)。\n"
+            "[2026-02-28] V4.8: 新增 SHA-256 系統啟動認證介面、實作進貨模組『批次複選』與『異步狀態同步』功能。\n"
+            "[2026-02-24] V4.6: 建立廠商績效評鑑體系 (質/備/運)、優化跨境物流多節點追蹤與自動化狀態更動紀錄。\n"
+            "[2026-02-08] V4.3: 引入採購需求分析模組 (ROP 模型)、優化商品銷售速率計算與回溯算法。\n"
+            "[2026-02-05] V4.2: 進貨與銷售端同步支援『內含營業稅 (5%)』回推運算邏輯。\n"
+            "[2026-02-02] V4.1: 進貨管理全面單據化，支援批量入庫驗收與加權平均成本 (WAC) 公式。\n"
         )
         log_text.insert("1.0", logs)
         log_text.config(state="disabled") 
@@ -4718,7 +4857,7 @@ class SalesApp:
     
     def action_track_complete_order(self):
         """ 
-        完成訂單 V5.1 (防斷鏈修正版)：
+        完成訂單 V5.1 (防斷鏈修正版):
         解決留白資料排序後掉到最底部的問題
         """
         sel = self.tree_track.selection()
@@ -5181,7 +5320,7 @@ class SalesApp:
                 self.products_df = df_prods_current
                 self.update_sales_prod_list()
                 self.load_tracking_data() 
-                messagebox.showinfo("成功", f"訂單 {order_id} 已高精度核算並送出。")
+                messagebox.showinfo("成功", f"訂單 {order_id} 已送出。")
 
                 # 重置 UI
                 self.cart_data = []; self.var_cust_name.set(""); self.var_extra_fee.set(0.0)
@@ -5452,6 +5591,5 @@ if __name__ == "__main__":
 #         pass 
 #     app = SalesApp(root)
 #     root.mainloop()
-
 
 
