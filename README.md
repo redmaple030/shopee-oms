@@ -1,9 +1,10 @@
 
-
-
 # 🛒 蝦皮/網拍專用進銷存管理系統 (Shopee-OMS Local-First)
 
 **針對 2026 蝦皮手續費新制開發，堅持「資料落地」的輕量級 ERP 解決方案。**
+
+![image] https://github.com/redmaple030/shopee-oms/blob/main/setup
+
 
 當前版本：5.1
 發布日期：2026-03-04
