@@ -4383,6 +4383,16 @@ class SalesApp:
                 df_h = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
                 df_v = pd.read_excel(xls, sheet_name=SHEET_VENDORS)
 
+            float_cols = ['平均前置天數', '綜合評等分數']
+            for col in float_cols:
+                if col in df_v.columns:
+                    # 先轉成 numeric 處理 NaN，再強制轉成 float
+                    df_v[col] = pd.to_numeric(df_v[col], errors='coerce').astype(float)
+            
+            # 星等通常是整數，但也建議轉成 float 以免意外
+            if '星等' in df_v.columns:
+                df_v['星等'] = pd.to_numeric(df_v['星等'], errors='coerce').fillna(5).astype(float)
+
             # 1. 篩選該廠商的所有已入庫紀錄
             v_mask = (df_h['供應商'].astype(str).str.strip() == vendor_name)
             finished_purchases = df_h[v_mask & (df_h['入庫日期'].notna()) & (df_h['入庫日期'] != "")].copy()
@@ -5591,5 +5601,6 @@ if __name__ == "__main__":
 #         pass 
 #     app = SalesApp(root)
 #     root.mainloop()
+
 
 
