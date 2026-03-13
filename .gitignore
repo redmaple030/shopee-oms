@@ -1,0 +1,31 @@
+# --- Python 系統快取 ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- 敏感設定檔 (絕對不能上傳) ---
+secrets_config.py
+credentials.json
+token.json
+
+# --- 使用者個人驗證與授權 (絕對不能上傳) ---
+sys_config.bin
+license.json
+credentials.json
+token.json
+
+# --- 業務資料庫與備份 (含有真實銷售紀錄，不建議上傳) ---
+*.xlsx
+*.bak
+temp_*.xlsx
+
+# --- 執行檔打包產出 ---
+build/
+dist/
+*.spec
+
+# --- 編輯器設定 ---
+.vscode/
+.idea/
+
+
