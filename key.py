@@ -19,7 +19,7 @@ class KeyGenApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ERP 營運管理工具 - 授權與維修中心")
-        self.root.geometry("450x520") # 稍微加大高度
+        self.root.geometry("450x520")
         self.root.resizable(False, False)
 
         style = ttk.Style()
