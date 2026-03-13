@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
@@ -216,7 +215,7 @@ class ImportWizard(tk.Toplevel):
             if self.save_callback(new_list):
                 messagebox.showinfo("成功", "商品資料庫已完成增量更新。")
                 self.destroy()
-=======
+                
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
@@ -433,4 +432,3 @@ class ImportWizard(tk.Toplevel):
             if self.save_callback(new_list):
                 messagebox.showinfo("成功", "商品資料庫已完成增量更新。")
                 self.destroy()
->>>>>>> 196702be60958b3b0a83deac41da5b8532db7a26

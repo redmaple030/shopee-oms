@@ -15,6 +15,8 @@ from ImportWizard import ImportWizard
 from ShippingWizard import show_shipping_dialog
 from decimal import Decimal, ROUND_HALF_UP
 import platform
+import uuid
+
 
 
 
@@ -27,6 +29,12 @@ except ImportError:
     AUTH_FILE = "sys_config.bin"
     RESCUE_SALT = "RESCUE_DEMO_SALT"
     RESCUE_ACCOUNT = "RESCUE_ADMIN"
+
+
+def get_machine_id():
+    """ 獲取電腦唯一識別碼 """
+    node = uuid.getnode()
+    return hashlib.sha256(str(node).encode()).hexdigest()[:12].upper()
 
 
 # 2. 加入這段函式：用來處理打包後的資源路徑
@@ -2545,8 +2553,11 @@ class SalesApp:
 
 
         # === VIP 驗證區塊 ===
+        
+
         vip_frame = ttk.LabelFrame(frame, text="🔒 進階功能解鎖", padding=15)
         vip_frame.pack(fill="x", pady=10)
+
 
         # 新增欄位：讓客戶輸入他的帳號
         ttk.Label(vip_frame, text="授權帳號(Email):").pack(side="left")
@@ -2557,11 +2568,11 @@ class SalesApp:
         self.var_vip_code = tk.StringVar()
         ttk.Entry(vip_frame, textvariable=self.var_vip_code, width=15).pack(side="left", padx=5)
         
+
         btn_unlock = ttk.Button(vip_frame, text="解鎖", command=self.unlock_vip_features)
         btn_unlock.pack(side="left", padx=10)
-        
-        # ... (後面的按鈕預設 disabled 邏輯同上)
 
+        # ... (後面的按鈕預設 disabled 邏輯同上)
 
     def unlock_vip_features(self):
         user_id = self.var_vip_user.get().strip()
@@ -2571,56 +2582,40 @@ class SalesApp:
             messagebox.showwarning("提示", "請輸入授權帳號與啟用碼")
             return
 
-        # 讀取全域變數的 SALT
-        # raw_string = user_id + SECRET_SALT  <-- 記得這裡要用全域變數，不要重複定義
-        try:
-            salt = globals().get('SECRET_SALT', "redmaple") # 確保 Salt 一致
-            raw_string = user_id + salt
-            # --- 這裡改成 sha256 ---
-            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
-        except:
-            raw_string = user_id + "redmaple"
-            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
+        # --- [核心邏輯 A：驗證啟用碼是否屬於該 Email] ---
+        # 這裡的算法與你的 KeyGenApp 必須一致：SHA256(Email + Salt)
+        salt = globals().get('SECRET_SALT', "redmaple")
+        raw_string = user_id + salt
+        expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:10].upper()
 
         if input_code == expected_code:
+            mid = get_machine_id() # 抓取這台電腦 ID
             self.is_vip = True
             
-            # === 【新增這段】儲存授權檔與路徑 ===
             try:
-                current_path = os.path.abspath(sys.executable)
                 save_data = {
                     "user_id": user_id,
                     "license_key": input_code,
-                    "install_path": current_path  # 綁定目前路徑
+                    "machine_history": [mid]  # 初始化紀錄清單，這台是第一台
                 }
                 with open("license.json", "w", encoding="utf-8") as f:
                     json.dump(save_data, f)
+                
+                messagebox.showinfo("成功", "VIP 功能已解鎖！授權已與此電腦綁定。")
+                self.refresh_backup_ui_status() # 更新 UI 按鈕狀態
             except Exception as e:
                 messagebox.showerror("錯誤", f"授權存檔失敗: {e}")
-            # ===================================
-
-            messagebox.showinfo("成功", "VIP 功能已解鎖！\n程式已綁定此資料夾。\n若移動程式位置，需重新輸入啟用碼。")
-            
-            # 解鎖按鈕
-            self.btn_login.config(state="normal")
-            self.lbl_auth_status.config(text="狀態: 尚未連結 (請點擊登入)", foreground="red")
-            
-            if self.drive_manager.is_authenticated:
-                 self.btn_upload.config(state="normal")
-                 self.btn_refresh.config(state="normal")
         else:
             messagebox.showerror("錯誤", "啟用碼錯誤！")
-
-
-        
+    
 
     def check_license_on_startup(self):
         """
-        程式啟動時，檢查是否有有效的授權檔
-        驗證:1. 金鑰正確性 2. 執行路徑是否改變
+        程式啟動時檢查授權：不檢查路徑，只檢查機器指紋。
+        支援自動換機登記 (最多 3 台)。
         """
         if not os.path.exists("license.json"):
-            return # 沒有授權檔，保持鎖定
+            return 
             
         try:
             with open("license.json", "r", encoding="utf-8") as f:
@@ -2628,51 +2623,60 @@ class SalesApp:
             
             saved_user = data.get("user_id", "")
             saved_key = data.get("license_key", "")
-            bound_path = data.get("install_path", "")
+            # 讀取已授權的機器清單
+            history = data.get("machine_history", [])
             
-            # === 1. 檢查路徑是否改變 (防複製/移動) ===
-            # sys.executable 會抓到目前 .exe 的絕對路徑
-            current_path = os.path.abspath(sys.executable)
+            # 1. 重新驗證金鑰金鑰本身的正確性 (防人為修改 JSON)
+            salt = globals().get('SECRET_SALT', "redmaple")
+            raw_string = saved_user + salt
+            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:10].upper()
             
-            # 如果是在開發環境 (py檔)，sys.executable 會是 python.exe 的路徑，
-            # 為了方便測試，我們可以放寬開發環境的檢查，只針對打包後的 EXE 檢查
-            if getattr(sys, 'frozen', False): 
-                # 這是打包後的 EXE 環境
-                if current_path != bound_path:
-                    # 路徑不符，視為非法移動
-                    messagebox.showwarning("授權失效", "偵測到程式已被移動或複製！\n為了安全起見，請重新輸入啟用碼進行綁定。")
-                    try:
-                        os.remove("license.json") # 刪除舊授權
-                    except:
-                        pass
-                    return 
+            if saved_key != expected_code:
+                print("system: license key tampered.")
+                return
 
-            # === 2. 重新驗證金鑰 (防修改存檔) ===
-            try:
-                salt = globals().get('SECRET_SALT', "DEMO_SALT_FOR_OPENSOURCE")
-                raw_string = saved_user + salt
-            except:
-                raw_string = saved_user + "DEMO_SALT_FOR_OPENSOURCE"
-                
-            expected_code = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
+            # 2. 機器指紋檢查
+            current_mid = get_machine_id()
             
-            if saved_key == expected_code:
-                # 通過驗證！自動解鎖
+            if current_mid in history:
+                # 情況一：這台電腦本來就在授權名單內
                 self.is_vip = True
+            else:
+                # 情況二：這是一台「新電腦」
+                if len(history) < 3: # 假設上限為 3 次換機機會
+                    history.append(current_mid)
+                    data["machine_history"] = history
+                    
+                    # 更新 JSON (下次啟動就不用再加了)
+                    with open("license.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f)
+                    
+                    self.is_vip = True
+                    messagebox.showinfo("授權更新", f"偵測到新環境。已自動綁定（剩餘更換次數：{3 - len(history)}）")
+                else:
+                    # 情況三：超過換機上限
+                    messagebox.showerror("授權超限", "此授權已在超過 3 台電腦上使用過，請連繫開發者。")
+                    self.is_vip = False
+                    return
+
+            # 3. 如果通過驗證，更新 UI
+            if self.is_vip:
                 self.var_vip_user.set(saved_user)
                 self.var_vip_code.set(saved_key)
-                
-                # 解鎖 UI
                 self.btn_login.config(state="normal")
                 self.lbl_auth_status.config(text="狀態: 🔒 VIP 授權有效 (自動登入)", foreground="green")
-                
-                # 如果有 token，連備份按鈕也一起開
+                # 如果 Google 已登入則解鎖備份按鈕
                 if self.drive_manager.is_authenticated:
                     self.btn_upload.config(state="normal")
                     self.btn_refresh.config(state="normal")
-                    self.lbl_auth_status.config(text="狀態: ✅ 系統就緒 (已連結 Google)", foreground="green")
+
         except Exception as e:
             print(f"system: failed to read license: {e}")
+
+    def refresh_backup_ui_status(self):
+        """ 解鎖成功後，立即啟用相關按鈕 """
+        self.btn_login.config(state="normal")
+        self.lbl_auth_status.config(text="狀態: ✅ VIP 已解鎖 (尚未連結 Google)", foreground="blue")
 
     # --- 執行緒相關函數 ---
     def start_login_thread(self):
@@ -3374,7 +3378,7 @@ class SalesApp:
                 df.at[idx, '總銷售額'] = new_qty * new_price
                 df.at[idx, '總成本'] = new_qty * cost
                 df.at[idx, '總淨利'] = (new_qty * new_price) - (new_qty * cost) - fee
-                self._save_all_sheets(df, SHEET_TRACKING)
+                self._universal_save({ SHEET_TRACKING: df })
                 messagebox.showinfo("成功", "資料已更新"); self.load_tracking_data(); win.destroy()
             except Exception as e: messagebox.showerror("錯誤", f"存檔失敗: {e}")
         tk.Button(win, text="確認修改", command=save_mod).pack(pady=15)
@@ -3490,25 +3494,7 @@ class SalesApp:
         except Exception as e: messagebox.showerror("錯誤", str(e))
 
 
-    @thread_safe_file
-    def _save_all_sheets(self, df_target, target_sheet_name):
-        """ 通用輔助函式：儲存單一變動分頁並保護其他所有分頁 """
-        try:
-            # 先讀取所有現有的 Sheet 內容
-            with pd.ExcelFile(FILE_NAME) as xls:
-                all_sheets = {sn: pd.read_excel(xls, sheet_name=sn) for sn in xls.sheet_names}
-            
-            # 更新目標 Sheet
-            all_sheets[target_sheet_name] = df_target
-            
-            # 全部寫回
-            with pd.ExcelWriter(FILE_NAME, engine='openpyxl') as writer:
-                for sn, df in all_sheets.items():
-                    df.to_excel(writer, sheet_name=sn, index=False)
-        except Exception as e:
-            messagebox.showerror("存檔錯誤", str(e))
-
-
+   
     def setup_returns_tab(self):
         """ 建立退貨紀錄查詢頁面 """
         frame = self.tab_returns
@@ -4457,6 +4443,9 @@ class SalesApp:
         
         btn_open_folder = ttk.Button(right_box, text="📂 打開所在資料夾", command=lambda: os.startfile(os.path.dirname(db_path)))
         btn_open_folder.pack(anchor="w", pady=10)
+
+        ttk.Label(right_box, text=f"當前設備識別碼: {get_machine_id()}", font=("Consolas", 8), foreground="gray").pack(anchor="w")
+
 
         # --- 底部：更新日誌 ---
         log_frame = ttk.LabelFrame(main_frame, text="📝 更新日誌", padding=10)

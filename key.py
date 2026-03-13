@@ -1,3 +1,4 @@
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 import hashlib
@@ -5,7 +6,14 @@ import hashlib
 # ==========================================
 # ⚠️ 重要設定：這裡的 SALT 必須跟您 ERP 主程式內的一模一樣
 # ==========================================
-SECRET_SALT = "redmaple"
+try:
+    from secrets_config import SECRET_SALT, RESCUE_SALT
+except ImportError:
+    # 如果找不到設定檔，跳出嚴重錯誤並關閉
+    root_temp = tk.Tk()
+    root_temp.withdraw()
+    messagebox.showerror("環境錯誤", "找不到 secrets_config.py 設定檔！\n為了安全，產鑰工具已停止運行。")
+    exit()
 
 class KeyGenApp:
     def __init__(self, root):
@@ -66,16 +74,15 @@ class KeyGenApp:
         ttk.Button(rescue_frame, text="📋 複製救援密鑰", command=lambda: self.copy_to_clip(self.var_rescue_result.get())).pack(fill="x")
 
     def generate_vip_code(self):
-        """ 針對客戶 Email 生成 8 碼啟用碼 """
+        """ 只針對 Email 生成啟用碼，不限機器，由本地 license.json 去數次數 """
         user_id = self.var_user.get().strip()
-        if not user_id:
-            messagebox.showwarning("提示", "請輸入客戶帳號")
+        if not user_id: 
             return
         
-        # 演算法與 ERP 內的 unlock_vip_features 必須一致
+        # 算出的 code 給使用者
         raw_string = user_id + SECRET_SALT
         hashed = hashlib.sha256(raw_string.encode()).hexdigest()
-        self.var_vip_result.set(hashed[:8].upper())
+        self.var_vip_result.set(hashed[:10].upper())
 
     def generate_rescue_code(self):
         """ 生成當前月份有效的 10 碼救援密鑰 """
@@ -83,7 +90,7 @@ class KeyGenApp:
         # 必須與主程式的格式完全一致
         dynamic_factor = datetime.datetime.now().strftime("%Y%m")
         
-        raw_string = SECRET_SALT + 'RESCUE_ONLY_SALT_XYZ' + dynamic_factor
+        raw_string = SECRET_SALT + RESCUE_SALT + dynamic_factor
         hashed = hashlib.sha256(raw_string.encode()).hexdigest()
         
         license_key = hashed[:10].upper()

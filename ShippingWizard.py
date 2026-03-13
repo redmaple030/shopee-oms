@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import os
 import sys
 import webbrowser
@@ -192,7 +191,7 @@ def generate_shipping_html(info, items, size_choice):
     
     # 開啟該路徑
     webbrowser.open(os.path.abspath(file_full_path))
-=======
+
 #出貨單生成插件
 
 import os
@@ -391,4 +390,3 @@ def generate_shipping_html(info, items, size_choice):
     
     # 開啟該路徑
     webbrowser.open(os.path.abspath(file_full_path))
->>>>>>> 196702be60958b3b0a83deac41da5b8532db7a26
