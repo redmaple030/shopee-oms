@@ -295,7 +295,7 @@ class LoginWindow:
 
         self.root = tk.Tk()
         self.root.title("ERP 系統登入")
-        self.root.geometry("400x320") # 稍微加寬一點更美觀
+        self.root.geometry("400x320") 
         self.root.resizable(False, False)
 
         try:
