@@ -300,7 +300,7 @@ class LoginWindow:
 
         try:
             self.root.iconbitmap(resource_path("main.ico"))
-        except:
+        except Exception:
             pass # 防止圖標遺失時程式崩潰
 
         
@@ -362,7 +362,7 @@ class LoginWindow:
                 if "rescue_used" not in data:
                     data["rescue_used"] = False
                 return data
-        except:
+        except Exception:
             return {}
 
 
@@ -431,7 +431,7 @@ class SalesApp:
 
         try:
             self.root.iconbitmap(resource_path("main.ico"))
-        except:
+        except Exception:
             pass
 
 
@@ -653,7 +653,7 @@ class SalesApp:
                         # 先轉 float 確保能處理字串 "3.0" 的情況，再視需求轉 int
                         num = float(val)
                         return int(num) if is_int else num
-                    except:
+                    except Exception:
                         return default
                 return default
 
@@ -698,7 +698,7 @@ class SalesApp:
             # 讀取或建立新表
             try:
                 df_cfg = pd.read_excel(FILE_NAME, sheet_name=SHEET_SYS_SETTINGS)
-            except:
+            except Exception:
                 df_cfg = pd.DataFrame(columns=["設定名稱", "參數值"])
 
             if "SYSTEM_SHOP_NAME" in df_cfg['設定名稱'].values:
@@ -773,10 +773,14 @@ class SalesApp:
                             if missing_cols:
                                 for c in missing_cols:
                                     # 根據欄位名稱賦予適當預設值
-                                    if c == "單位權重": df_current[c] = 1.0
-                                    elif "數量" in c or "率" in c or "分數" in c: df_current[c] = 0
-                                    elif "金額" in c or "單價" in c or "成本" in c: df_current[c] = 0.0
-                                    else: df_current[c] = ""
+                                    if c == "單位權重":
+                                        df_current[c] = 1.0
+                                    elif "數量" in c or "率" in c or "分數" in c:
+                                        df_current[c] = 0
+                                    elif "金額" in c or "單價" in c or "成本" in c:
+                                        df_current[c] = 0.0
+                                    else:
+                                        df_current[c] = ""
                                 
                                 # 為了防止誤刪除，我們要確保欄位順序對齊最新定義
                                 df_current = df_current[req_cols]
@@ -812,7 +816,8 @@ class SalesApp:
             # 1. 基礎補位與清洗
             df['分類Tag'] = df['分類Tag'].fillna("未分類").astype(str).str.strip()
             df['商品名稱'] = df['商品名稱'].fillna("").astype(str).str.strip()
-            if "商品編號" not in df.columns: df["商品編號"] = ""
+            if "商品編號" not in df.columns:
+                df["商品編號"] = ""
 
             # 2. 定義自然排序的 Key 產生器
             def natural_sort_key(s):
@@ -1038,7 +1043,8 @@ class SalesApp:
     def on_pur_cart_double_click(self, event):
         """ 雙擊右側購物車項目，彈出小視窗修改數量與單價 """
         sel = self.tree_pur_cart.selection()
-        if not sel: return
+        if not sel:
+            return
         
         item_id = sel[0]
         idx = self.tree_pur_cart.index(item_id)
@@ -1051,15 +1057,19 @@ class SalesApp:
 
         ttk.Label(win, text=f"商品: {current['name']}", font=("", 10, "bold")).pack(pady=10)
         
-        f_qty = ttk.Frame(win); f_qty.pack(pady=2)
+        f_qty = ttk.Frame(win)
+        f_qty.pack(pady=2)
         ttk.Label(f_qty, text="數量:").pack(side="left")
-        ent_qty = ttk.Entry(f_qty, width=15); ent_qty.pack(side="left", padx=5)
+        ent_qty = ttk.Entry(f_qty, width=15)
+        ent_qty.pack(side="left", padx=5)
         ent_qty.insert(0, str(current['qty']))
         ent_qty.focus_set()
 
-        f_cost = ttk.Frame(win); f_cost.pack(pady=2)
+        f_cost = ttk.Frame(win)
+        f_cost.pack(pady=2)
         ttk.Label(f_cost, text="單價:").pack(side="left")
-        ent_cost = ttk.Entry(f_cost, width=15); ent_cost.pack(side="left", padx=5)
+        ent_cost = ttk.Entry(f_cost, width=15)
+        ent_cost.pack(side="left", padx=5)
         ent_cost.insert(0, str(current['cost']))
 
         
@@ -1103,7 +1113,8 @@ class SalesApp:
     def move_pur_item_up(self):
         """ 將採購清單中的選中項目上移 """
         leaves = self.tree_pur_cart.selection()
-        if not leaves: return
+        if not leaves:
+            return
         
         for item in leaves:
             # 取得目前的視覺索引
@@ -1120,7 +1131,8 @@ class SalesApp:
     def move_pur_item_down(self):
         """ 將採購清單中的選中項目下移 """
         leaves = self.tree_pur_cart.selection()
-        if not leaves: return
+        if not leaves:
+            return
         
         # 下移需要倒著處理，防止索引跑掉
         for item in reversed(leaves):
@@ -1168,13 +1180,15 @@ class SalesApp:
         self.list_pur_v.delete(0, tk.END) # 剛才報錯的地方
         
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME):
+                return
             df_v = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
             
             for _, row in df_v.iterrows():
                 name = str(row['廠商名稱']).strip()
                 channel = str(row.get('通路', '')).strip()
-                if name == "nan" or name == "": continue
+                if name == "nan" or name == "":
+                    continue
                 
                 if query in name.lower() or query in channel.lower():
                     display_text = f"{name} ({channel})" if channel else name
@@ -1245,7 +1259,8 @@ class SalesApp:
 
     @thread_safe_file
     def submit_purchase_batch(self):
-        if not self.pur_cart_data: return
+        if not self.pur_cart_data:
+            return
         supplier = self.var_pur_supplier.get().strip()
         pur_id = "I" + datetime.now().strftime("%Y%m%d%H%M%S")
         
@@ -1287,7 +1302,8 @@ class SalesApp:
             }):
                 messagebox.showinfo("成功", f"採購單 {pur_id} 已建立！")
                 self.pur_cart_data = []
-                for i in self.tree_pur_cart.get_children(): self.tree_pur_cart.delete(i)
+                for i in self.tree_pur_cart.get_children():
+                    self.tree_pur_cart.delete(i)
                 # 關鍵：提交完立刻刷新追蹤界面
                 self.load_purchase_tracking()
                 self.calculate_analysis_data()
@@ -1335,10 +1351,12 @@ class SalesApp:
             self.tree_pur_track.delete(i)
             
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME):
+                return
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_PUR_TRACKING)
             
-            if df.empty: return
+            if df.empty: 
+                return
 
             # --- [預防性數據清洗] ---
             # 將常見的空值表示符統一轉換為 Pandas 可辨識的空值，再統一填補
@@ -1469,12 +1487,14 @@ class SalesApp:
                 # 這樣就不會再出現 "Invalid value for dtype int64" 的錯誤
                 for df in [df_track, df_hist]:
                     for col in ['分攤運費', '海關稅金']:
-                        if col not in df.columns: df[col] = 0.0
+                        if col not in df.columns: 
+                            df[col] = 0.0
                         # 關鍵：先轉成 numeric (處理 NaN)，再強制轉成 float 類型
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
                 
                 # 商品資料的權重也要確保是數字
-                if '單位權重' not in df_prods.columns: df_prods['單位權重'] = 1.0
+                if '單位權重' not in df_prods.columns: 
+                    df_prods['單位權重'] = 1.0
                 df_prods['單位權重'] = pd.to_numeric(df_prods['單位權重'], errors='coerce').fillna(1.0).astype(float)
 
                 # 建立重量地圖
@@ -1492,7 +1512,8 @@ class SalesApp:
                     u_weight = weight_map.get(p_name, 1.0)
                     order_total_weight += (qty * u_weight)
 
-                if order_total_weight == 0: order_total_weight = 1
+                if order_total_weight == 0: 
+                    order_total_weight = 1
 
                 # 2. 開始分配 (小數點保留至第一位)
                 for idx in df_track[mask].index:
@@ -1522,7 +1543,7 @@ class SalesApp:
                 df_hist.drop(columns=['tmp_id'], inplace=True, errors='ignore')
                 
                 if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
-                    messagebox.showinfo("成功", f"分攤完畢！\n已將運費與稅金分配至各品項 (保留1位小數)")
+                    messagebox.showinfo("成功", "分攤完畢！\n已將運費與稅金分配至各品項 (保留1位小數)")
                     self.load_purchase_tracking()
                     win.destroy()
 
@@ -1658,7 +1679,8 @@ class SalesApp:
 
     def refresh_vendor_management_ui(self):
         """ 根據開關，動態隱藏或顯示廠商管理的績效區塊 """
-        if not hasattr(self, 'perf_frame'): return
+        if not hasattr(self, 'perf_frame'):
+            return
         
         if self.var_enable_vendor_kpi.get():
             # 重新顯示
@@ -1680,13 +1702,15 @@ class SalesApp:
                 channel = str(row.get('通路', ''))
                 if query in name.lower() or query in channel.lower():
                     self.list_vendors.insert(tk.END, f"{name} ({channel})")
-        except: pass
+        except Exception:
+            pass
 
     @thread_safe_file
     def on_vendor_select(self, event):
         """ 當點選廠商清單時，將詳情填入左側，並即時運算績效評分 """
         sel = self.list_vendors.curselection()
-        if not sel: return
+        if not sel:
+            return
         
         display_str = self.list_vendors.get(sel[0])
         v_name_selected = display_str.split(" (")[0].strip()
@@ -1699,7 +1723,8 @@ class SalesApp:
             row = df_v[df_v['廠商名稱'].astype(str).str.strip() == v_name_selected].iloc[0]
             
             def c(val, default=""):
-                if pd.isna(val) or str(val).lower() == "nan": return default
+                if pd.isna(val) or str(val).lower() == "nan":
+                    return default
                 return str(val)
 
             self.var_v_name.set(c(row['廠商名稱']))
@@ -1791,7 +1816,7 @@ class SalesApp:
             try:
                 manual_stars = int(self.var_v_manual_adj.get())
                 manual_score = manual_stars * 20
-            except:
+            except Exception:
                 manual_score = 100
                 
             final_mixed_score = (system_score * sys_ratio) + (manual_score * (1 - sys_ratio))
@@ -1856,7 +1881,7 @@ class SalesApp:
             try:
                 df = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
                 df = df.fillna("") # 讀取後立刻清掉 nan
-            except:
+            except Exception:
                 # 若讀取失敗，建立符合結構的空表
                 df = pd.DataFrame(columns=[
                     "廠商名稱", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
@@ -1875,7 +1900,7 @@ class SalesApp:
                         part = source_str.split(key)[1].split('/')[0].split(')')[0].strip()
                         return part
                     return "0%" if "質" in key or "滿" in key else "0"
-                except:
+                except Exception:
                     return "0"
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1900,7 +1925,7 @@ class SalesApp:
             
             try: 
                 new_entry["星等"] = int(self.var_v_manual_adj.get())
-            except: 
+            except Exception:
                 new_entry["星等"] = 5
 
             # 4. 準備型別轉換 (防止 float64 衝突)
@@ -1945,15 +1970,18 @@ class SalesApp:
     @thread_safe_file
     def delete_vendor(self):
         name = self.var_v_name.get().strip()
-        if not name or not messagebox.askyesno("確認", f"確定刪除廠商 [{name}]？"): return
+        if not name or not messagebox.askyesno("確認", f"確定刪除廠商 [{name}]？"):
+            return
         try:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_VENDORS)
             df = df[df['廠商名稱'] != name]
             if self._universal_save({SHEET_VENDORS: df}):
                 self.update_vendor_list()
                 self.update_pur_supplier_list()
-                self.var_v_name.set(""); self.var_v_channel.set("")
-        except: pass
+                self.var_v_name.set("")
+                self.var_v_channel.set("")
+        except Exception:
+            pass
 
 
     def open_vendor_import_wizard(self):
@@ -2067,19 +2095,24 @@ class SalesApp:
     @thread_safe_file
     def calculate_analysis_data(self):
         """ 核心分析邏輯 V5.2: 使用 Decimal 高精度運算，修正消失問題 """
-        if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'): return
+        if not hasattr(self, 'tree_time_stats') or not hasattr(self, 'tree_prod_stats'):
+            return
         
-        for i in self.tree_time_stats.get_children(): self.tree_time_stats.delete(i)
-        for i in self.tree_prod_stats.get_children(): self.tree_prod_stats.delete(i)
+        for i in self.tree_time_stats.get_children():
+            self.tree_time_stats.delete(i)
+        for i in self.tree_prod_stats.get_children():
+            self.tree_prod_stats.delete(i)
         
-        if not os.path.exists(FILE_NAME): return
+        if not os.path.exists(FILE_NAME):
+            return
 
         try:
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
 
-            if df_sales.empty: return
+            if df_sales.empty:
+                return
 
             # --- [數據清洗] ---
             df_sales = df_sales.replace(r'^\s*$', pd.NA, regex=True)
@@ -2175,8 +2208,10 @@ class SalesApp:
 
             def get_velocity(name, qty):
                 st = pd.to_datetime(start_date_map.get(name), errors='coerce')
-                if pd.isna(st): st = first_sale_map.get(name)
-                if pd.isna(st): st = now
+                if pd.isna(st):
+                    st = first_sale_map.get(name)
+                if pd.isna(st):
+                    st = now
                 days = max((now - st).days, 1)
                 return round(float(qty) / days, 2)
 
@@ -2204,23 +2239,23 @@ class SalesApp:
                     f"{row['velocity']} 件/日"
                 ))
 
-        except Exception as e:
+        except Exception :
             import traceback
             traceback.print_exc()
 
             
     def sort_tree_column(self, tree, col, reverse):
         """(進階功能) 點擊標題可以排序"""
-        l = [(tree.set(k, col), k) for k in tree.get_children('')]
+        title = [(tree.set(k, col), k) for k in tree.get_children('')]
         
         # 嘗試將字串轉數字進行排序 (去除 $ 和 % 符號)
         try:
-            l.sort(key=lambda t: float(t[0].replace('$', '').replace(',', '').replace('%', '')), reverse=reverse)
+            title.sort(key=lambda t: float(t[0].replace('$', '').replace(',', '').replace('%', '')), reverse=reverse)
         except ValueError:
-            l.sort(reverse=reverse)
+            title.sort(reverse=reverse)
 
         # 重新排列
-        for index, (val, k) in enumerate(l):
+        for index, (val, k) in enumerate(title):
             tree.move(k, '', index)
 
         # 切換下次排序順序
@@ -2335,16 +2370,20 @@ class SalesApp:
     @thread_safe_file
     def generate_procurement_report(self):
         """ 採購需求分析 V5.5：精確 ROP 模型，只顯示需要採購的商品 """
-        if not hasattr(self, 'tree_procure'): return
-        for i in self.tree_procure.get_children(): self.tree_procure.delete(i)
+        if not hasattr(self, 'tree_procure'):
+            return
+        for i in self.tree_procure.get_children():
+            self.tree_procure.delete(i)
         
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME):
+                return
             with pd.ExcelFile(FILE_NAME) as xls:
                 df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
                 df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
             
-            if df_prods.empty: return
+            if df_prods.empty:
+                return
 
             # 資料清洗與型別轉換
             for col in ['目前庫存', '安全庫存']:
@@ -2360,7 +2399,7 @@ class SalesApp:
             try:
                 v_threshold = float(self.var_filter_velocity.get())
                 cover_days = int(self.var_days_to_cover.get()) # 您設定的備貨天數 (例如 30)
-            except:
+            except Exception:
                 v_threshold, cover_days = 0.01, 30
 
             for _, row in df_prods.iterrows():
@@ -2370,7 +2409,8 @@ class SalesApp:
                 
                 # --- [1. 統一計算銷售速度] ---
                 st_date = pd.to_datetime(row.get('初始上架時間'), errors='coerce')
-                if pd.isna(st_date): st_date = first_sale_map.get(p_name, now)
+                if pd.isna(st_date):
+                    st_date = first_sale_map.get(p_name, now)
                 
                 days_diff = max((now - st_date).days, 1)
                 velocity = float(qty_sum.get(p_name, 0)) / days_diff
@@ -2427,7 +2467,8 @@ class SalesApp:
 
     def update_calc_prod_list(self):
         """ 初始化估算器的商品清單 """
-        if not hasattr(self, 'list_calc_prod'): return
+        if not hasattr(self, 'list_calc_prod'):
+            return
         self.list_calc_prod.delete(0, tk.END)
         if not self.products_df.empty:
             for _, row in self.products_df.iterrows():
@@ -2446,7 +2487,8 @@ class SalesApp:
     def on_calc_prod_select(self, event):
         """ 當選取列表商品時，自動填入成本與預設資訊 """
         sel = self.list_calc_prod.curselection()
-        if not sel: return
+        if not sel:
+            return
         
         p_name = self.list_calc_prod.get(sel[0])
         self.var_calc_name.set(p_name)
@@ -2691,7 +2733,7 @@ class SalesApp:
     def _login_callback(self, success, msg):
         self.btn_login.config(state="normal")
         if success:
-            self.lbl_auth_status.config(text=f"狀態: 登入成功", foreground="green")
+            self.lbl_auth_status.config(text="狀態: 登入成功", foreground="green")
             
             # 【修正點 5】登入成功後，解鎖功能按鈕
             self.btn_upload.config(state="normal")
@@ -2728,7 +2770,8 @@ class SalesApp:
             messagebox.showerror("失敗", msg)
 
     def start_list_thread(self):
-        if not self.drive_manager.is_authenticated: return
+        if not self.drive_manager.is_authenticated:
+            return
         self.btn_refresh.config(state="disabled", text="讀取中...")
         threading.Thread(target=self._run_list, daemon=True).start()
 
@@ -2741,7 +2784,8 @@ class SalesApp:
         for item in self.tree_backup.get_children():
             self.tree_backup.delete(item)
             
-        if not files: return
+        if not files:
+            return
 
         for f in files:
             raw_time = f.get('createdTime', '')
@@ -2751,14 +2795,15 @@ class SalesApp:
                 # 2. 自動加 8 小時 (修正為台灣時間)
                 dt = dt + timedelta(hours=8)
                 nice_time = dt.strftime("%Y-%m-%d %H:%M")
-            except:
+            except Exception:
                 nice_time = raw_time
             
             self.tree_backup.insert("", "end", values=(f['name'], nice_time), tags=(f['id'],))
 
     def action_restore_backup(self, event):
         item_id = self.tree_backup.selection()
-        if not item_id: return
+        if not item_id:
+            return
         
         item = self.tree_backup.item(item_id)
         file_name = item['values'][0]
@@ -2961,7 +3006,8 @@ class SalesApp:
     def move_sales_item_up(self):
         """ 將銷售清單中的選中項目上移 """
         selected = self.tree.selection()
-        if not selected: return
+        if not selected:
+            return
         
         for item in selected:
             idx = self.tree.index(item)
@@ -2976,7 +3022,8 @@ class SalesApp:
     def move_sales_item_down(self):
         """ 將銷售清單中的選中項目下移 """
         selected = self.tree.selection()
-        if not selected: return
+        if not selected:
+            return
         
         # 下移要倒著處理，防止索引位移問題
         for item in reversed(selected):
@@ -3083,7 +3130,8 @@ class SalesApp:
 
     def render_add_area(self):
         """ 動態渲染左側建檔區 """
-        for w in self.frame_left.winfo_children(): w.destroy()
+        for w in self.frame_left.winfo_children():
+            w.destroy()
         
         # 1. 商品編號 (可選)
         if self.show_fields["商品編號"].get():
@@ -3137,7 +3185,8 @@ class SalesApp:
     def render_edit_area(self):
         """ 動態渲染右側編輯區 (使用 Grid) """
         for w in self.edit_frame.winfo_children(): 
-            if w.winfo_class() != "TFrame": w.destroy() # 保留按鈕 Frame
+            if w.winfo_class() != "TFrame": 
+                w.destroy() # 保留按鈕 Frame
 
         curr_row = 0
         e_opts = {'padx': 5, 'pady': 2, 'sticky': 'w'}
@@ -3205,7 +3254,8 @@ class SalesApp:
     @thread_safe_file
     def callback_from_wizard(self, new_data_list):
         """ 當精靈完成匹配並按下確認時，接收資料並存入 Excel """
-        if not new_data_list: return False
+        if not new_data_list: 
+            return False
         
         try:
             df_new = pd.DataFrame(new_data_list)
@@ -3301,11 +3351,13 @@ class SalesApp:
             self.tree_track.delete(i)
             
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME): 
+                return
             
             # 1. 讀取 Excel 原始資料
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            if df.empty: return
+            if df.empty: 
+                return
 
             # 2. 統一格式化訂單編號 (這是我們的分組依據)
             df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -3362,25 +3414,39 @@ class SalesApp:
         if not sel:
             messagebox.showwarning("提示", "請先選擇要修改的商品項目")
             return
-        item = self.tree_track.item(sel[0]); idx = int(item['text']); vals = item['values']
-        prod_name = vals[4]; old_qty = vals[5]; old_price = vals[6]
-        win = tk.Toplevel(self.root); win.title(f"修改: {prod_name}"); win.geometry("300x200")
+        item = self.tree_track.item(sel[0])
+        idx = int(item['text'])
+        vals = item['values']
+        prod_name = vals[4]
+        old_qty = vals[5]
+        old_price = vals[6]
+        win = tk.Toplevel(self.root)
+        win.title(f"修改: {prod_name}")
+        win.geometry("300x200")
         tk.Label(win, text="數量:").pack(pady=5)
-        var_qty = tk.IntVar(value=old_qty); tk.Entry(win, textvariable=var_qty).pack()
+        var_qty = tk.IntVar(value=old_qty)
+        tk.Entry(win, textvariable=var_qty).pack()
         tk.Label(win, text="售價:").pack(pady=5)
-        var_price = tk.DoubleVar(value=old_price); tk.Entry(win, textvariable=var_price).pack()
+        var_price = tk.DoubleVar(value=old_price)
+        tk.Entry(win, textvariable=var_price).pack()
         def save_mod():
             try:
                 df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-                new_qty = var_qty.get(); new_price = var_price.get()
-                df.at[idx, '數量'] = new_qty; df.at[idx, '單價(售)'] = new_price
-                cost = df.at[idx, '單價(進)']; fee = df.at[idx, '分攤手續費']
+                new_qty = var_qty.get()
+                new_price = var_price.get()
+                df.at[idx, '數量'] = new_qty
+                df.at[idx, '單價(售)'] = new_price
+                cost = df.at[idx, '單價(進)']
+                fee = df.at[idx, '分攤手續費']
                 df.at[idx, '總銷售額'] = new_qty * new_price
                 df.at[idx, '總成本'] = new_qty * cost
                 df.at[idx, '總淨利'] = (new_qty * new_price) - (new_qty * cost) - fee
                 self._universal_save({ SHEET_TRACKING: df })
-                messagebox.showinfo("成功", "資料已更新"); self.load_tracking_data(); win.destroy()
-            except Exception as e: messagebox.showerror("錯誤", f"存檔失敗: {e}")
+                messagebox.showinfo("成功", "資料已更新")
+                self.load_tracking_data()
+                win.destroy()
+            except Exception as e:
+                messagebox.showerror("錯誤", f"存檔失敗: {e}")
         tk.Button(win, text="確認修改", command=save_mod).pack(pady=15)
 
 
@@ -3389,10 +3455,14 @@ class SalesApp:
     def action_track_delete_item(self):
         """ 刪除單一商品 (含表頭自動遞補邏輯) """
         sel = self.tree_track.selection()
-        if not sel: return
-        item = self.tree_track.item(sel[0]); idx = int(item['text'])
-        order_id = str(item['values'][0]); prod_name = str(item['values'][4])
-        if not messagebox.askyesno("刪除商品", f"確定要從訂單 [{order_id}] 中\n刪除商品「{prod_name}」嗎？"): return
+        if not sel:
+            return
+        item = self.tree_track.item(sel[0])
+        idx = int(item['text'])
+        order_id = str(item['values'][0])
+        prod_name = str(item['values'][4])
+        if not messagebox.askyesno("刪除商品", f"確定要從訂單 [{order_id}] 中\n刪除商品「{prod_name}」嗎？"):
+            return
         try:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
             df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True)
@@ -3403,11 +3473,14 @@ class SalesApp:
                 if others_indices:
                     new_header_idx = others_indices[0]
                     cols_to_inherit = ['日期', '交易平台', '買家名稱', '寄送方式', '取貨地點', '扣費項目']
-                    for col in cols_to_inherit: df.at[new_header_idx, col] = df.at[idx, col]
+                    for col in cols_to_inherit: 
+                        df.at[new_header_idx, col] = df.at[idx, col]
             df.drop(idx, inplace=True)
             self._universal_save({ SHEET_TRACKING: df })
-            messagebox.showinfo("成功", "商品已刪除"); self.load_tracking_data()
-        except Exception as e: messagebox.showerror("錯誤", f"刪除失敗: {e}")
+            messagebox.showinfo("成功", "商品已刪除")
+            self.load_tracking_data()
+        except Exception as e: 
+            messagebox.showerror("錯誤", f"刪除失敗: {e}")
 
 
 
@@ -3463,10 +3536,13 @@ class SalesApp:
         """ 退貨整筆訂單 (修正存檔格式) """
         from tkinter import simpledialog
         sel = self.tree_track.selection()
-        if not sel: return
-        item = self.tree_track.item(sel[0]); order_id = str(item['values'][0]).replace("'", "")
+        if not sel: 
+            return
+        item = self.tree_track.item(sel[0]) 
+        order_id = str(item['values'][0]).replace("'", "")
         reason = simpledialog.askstring("整筆退貨", "請輸入整筆退貨原因:", parent=self.root)
-        if reason is None: return
+        if reason is None: 
+            return
         
         try:
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
@@ -3474,11 +3550,14 @@ class SalesApp:
             mask = df_track['訂單編號'] == order_id
             rows_to_return = df_track[mask].copy()
             info = self._get_full_order_info(df_track, order_id)
-            for col, val in info.items(): rows_to_return[col] = val
+            for col, val in info.items(): 
+                rows_to_return[col] = val
             rows_to_return['備註'] = reason
             
-            try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
-            except: df_returns = pd.DataFrame()
+            try: 
+                df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
+            except Exception:
+                df_returns = pd.DataFrame()
             df_returns = pd.concat([df_returns, rows_to_return], ignore_index=True)
             df_track_new = df_track[~mask]
             
@@ -3490,8 +3569,10 @@ class SalesApp:
             
             if success:
                 messagebox.showinfo("成功", f"訂單 {order_id} 整筆已移至退貨。")
-                self.load_tracking_data(); self.load_returns_data()
-        except Exception as e: messagebox.showerror("錯誤", str(e))
+                self.load_tracking_data()
+                self.load_returns_data()
+        except Exception as e: 
+            messagebox.showerror("錯誤", str(e))
 
 
    
@@ -3532,7 +3613,8 @@ class SalesApp:
             self.tree_returns.delete(i)
             
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME): 
+                return
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
             
             # 格式化編號
@@ -3570,14 +3652,22 @@ class SalesApp:
         self.tree_sales_edit = ttk.Treeview(list_frame, columns=cols, show='headings', height=12)
         
         # 設定欄寬
-        self.tree_sales_edit.heading("日期", text="日期"); self.tree_sales_edit.column("日期", width=90)
-        self.tree_sales_edit.heading("買家名稱", text="買家名稱"); self.tree_sales_edit.column("買家名稱", width=80)
-        self.tree_sales_edit.heading("商品", text="商品名稱"); self.tree_sales_edit.column("商品", width=150)
-        self.tree_sales_edit.heading("數量", text="數量"); self.tree_sales_edit.column("數量", width=50, anchor="center")
-        self.tree_sales_edit.heading("售價", text="售價"); self.tree_sales_edit.column("售價", width=60, anchor="e")
-        self.tree_sales_edit.heading("手續費", text="手續費"); self.tree_sales_edit.column("手續費", width=60, anchor="e")
-        self.tree_sales_edit.heading("淨利", text="淨利"); self.tree_sales_edit.column("淨利", width=60, anchor="e")
-        self.tree_sales_edit.heading("毛利", text="毛利%"); self.tree_sales_edit.column("毛利", width=60, anchor="e")
+        self.tree_sales_edit.heading("日期", text="日期")
+        self.tree_sales_edit.column("日期", width=90)
+        self.tree_sales_edit.heading("買家名稱", text="買家名稱")
+        self.tree_sales_edit.column("買家名稱", width=80)
+        self.tree_sales_edit.heading("商品", text="商品名稱")
+        self.tree_sales_edit.column("商品", width=150)
+        self.tree_sales_edit.heading("數量", text="數量")
+        self.tree_sales_edit.column("數量", width=50, anchor="center")
+        self.tree_sales_edit.heading("售價", text="售價")
+        self.tree_sales_edit.column("售價", width=60, anchor="e")
+        self.tree_sales_edit.heading("手續費", text="手續費")
+        self.tree_sales_edit.column("手續費", width=60, anchor="e")
+        self.tree_sales_edit.heading("淨利", text="淨利")
+        self.tree_sales_edit.column("淨利", width=60, anchor="e")
+        self.tree_sales_edit.heading("毛利", text="毛利%")
+        self.tree_sales_edit.column("毛利", width=60, anchor="e")
 
         scrolly = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree_sales_edit.yview)
         self.tree_sales_edit.configure(yscrollcommand=scrolly.set)
@@ -3698,7 +3788,8 @@ class SalesApp:
             
             # 更新備註 (追加售後資訊)
             current_tags = str(df_sales.at[idx, '扣費項目']) if pd.notna(df_sales.at[idx, '扣費項目']) else ""
-            if current_tags == "nan": current_tags = ""
+            if current_tags == "nan":
+                current_tags = ""
             
             # 建立新的備註標記
             new_tag = f"[{after_type}:-${extra_cost}] {after_remark}"
@@ -3762,12 +3853,14 @@ class SalesApp:
             self.tree_sales_edit.delete(i)
         
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME): 
+                return
             # 讀取原始資料
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             
-            if df.empty: return
+            if df.empty: 
+                return
 
             # --- [關鍵修正 A：在記憶體中填充空值] ---
             # 確保統計與顯示時，每一行都有完整的買家資訊，解決 nan 問題
@@ -3804,7 +3897,8 @@ class SalesApp:
     def on_sales_edit_select(self, event):
         """ 修正版：從暫存的 sales_edit_df 中使用 .loc 精準讀取 """
         sel = self.tree_sales_edit.selection()
-        if not sel: return
+        if not sel: 
+            return
         
         item = self.tree_sales_edit.item(sel[0])
         # idx 是我們在 insert 時存入 text 的原始標籤
@@ -3845,7 +3939,8 @@ class SalesApp:
     def save_sales_edit(self):
         """儲存修改並自動重算 (含 Excel 欄位自動修復)"""
         idx = self.var_edit_idx.get()
-        if idx < 0: return
+        if idx < 0: 
+            return
 
         try:
             # 1. 取得新數值
@@ -3895,7 +3990,7 @@ class SalesApp:
             with pd.ExcelWriter(FILE_NAME, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 try:
                     df_prods = pd.read_excel(FILE_NAME, sheet_name='商品資料')
-                except:
+                except Exception:
                     df_prods = pd.DataFrame()
                 
                 df.to_excel(writer, sheet_name='銷售紀錄', index=False)
@@ -3913,7 +4008,8 @@ class SalesApp:
     @thread_safe_file
     def delete_sales_record(self):
         idx = self.var_edit_idx.get()
-        if idx < 0: return
+        if idx < 0: 
+            return
         
         confirm = messagebox.askyesno("確認刪除", "確定要刪除這筆銷售紀錄嗎？\n(注意：這不會自動把庫存加回去，請手動調整庫存)")
         if confirm:
@@ -4030,7 +4126,7 @@ class SalesApp:
             with open(AUTH_FILE, "r") as f:
                 curr_auth = json.load(f)
                 self.var_auto_login.set(curr_auth.get("remember", False))
-        except:
+        except Exception:
             self.var_auto_login.set(False)
 
         self.chk_auto_login = ttk.Checkbutton(bypass_f, text="啟動程式時自動登入 (Bypass Login)", 
@@ -4055,7 +4151,8 @@ class SalesApp:
         self.kpi_labels = []  # 建議也存標籤，讓它們一起變灰色更專業
 
         # 設定欄位權重
-        for i in range(4): kpi_grid.columnconfigure(i, weight=1)
+        for i in range(4): 
+            kpi_grid.columnconfigure(i, weight=1)
 
         # 輔助函式：快速建立標籤與輸入框並加入追蹤
         def add_kpi_field(row, col, text, var):
@@ -4189,7 +4286,8 @@ class SalesApp:
             if "VENDOR_ENABLE_KPI" in df_sys['設定名稱'].values:
                 df_sys.loc[df_sys['設定名稱'] == "VENDOR_ENABLE_KPI", '參數值'] = val
                 self._universal_save({SHEET_SYS_SETTINGS: df_sys})
-        except: pass
+        except Exception: 
+            pass
 
 
 
@@ -4236,13 +4334,15 @@ class SalesApp:
     def refresh_fee_tree(self):
         """ 從『手續費設定』分頁載入，不再受系統參數干擾 """
         if hasattr(self, 'fee_tree'):
-            for i in self.fee_tree.get_children(): self.fee_tree.delete(i)
+            for i in self.fee_tree.get_children(): 
+                self.fee_tree.delete(i)
         
         self.fee_lookup = {}
         fee_options = ["自訂手動輸入"]
 
         try:
-            if not os.path.exists(FILE_NAME): return
+            if not os.path.exists(FILE_NAME): 
+                return
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_FEES)
             df = df.dropna(subset=['設定名稱'])
 
@@ -4703,7 +4803,7 @@ class SalesApp:
             # 1. 取得人為印象分數 (1-5 轉為 0-100)
             try:
                 manual_val = int(self.var_v_manual_adj.get()) * 20 
-            except:
+            except Exception:
                 manual_val = 100 # 沒填預設滿分印象
 
             # 2. 計算系統數據得分 (品質 40%, 時效 30%, 滿足率 10%)
@@ -4715,10 +4815,14 @@ class SalesApp:
 
             # 轉換為星等 (5星制)
             star = 1
-            if final_score >= 90: star = 5
-            elif final_score >= 80: star = 4
-            elif final_score >= 70: star = 3
-            elif final_score >= 60: star = 2
+            if final_score >= 90: 
+                star = 5
+            elif final_score >= 80: 
+                star = 4
+            elif final_score >= 70: 
+                star = 3
+            elif final_score >= 60: 
+                star = 2
 
             # 2. 更新回廠商分頁
             if vendor_name in df_v['廠商名稱'].astype(str).str.strip().values:
@@ -4748,20 +4852,6 @@ class SalesApp:
             import traceback
             traceback.print_exc()
 
-
-    def update_pur_prod_list(self):
-        """ 初始化/重新載入進貨商品清單 """
-        if not hasattr(self, 'list_pur_prod'): return
-        self.list_pur_prod.delete(0, tk.END)
-        
-        if not self.products_df.empty:
-            for _, row in self.products_df.iterrows():
-                p_name = str(row['商品名稱'])
-                raw_tag = row.get('分類Tag', '')
-                display_tag = str(raw_tag).strip() if pd.notna(raw_tag) else ""
-                
-                full_display_name = f"[{display_tag}] {p_name}" if display_tag else p_name
-                self.list_pur_prod.insert(tk.END, full_display_name)
 
     def on_pur_prod_select(self, event):
         """ 當進貨選中商品時，自動帶入目前的成本作為參考 """
@@ -4811,21 +4901,6 @@ class SalesApp:
         self.update_pur_prod_list() # 恢復完整列表
 
 
-    def remove_from_pur_cart(self):
-        """ 移除進貨購物車中的選定單項商品 (修正報錯) """
-        sel = self.tree_pur_cart.selection()
-        if not sel:
-            messagebox.showwarning("提示", "請先點選要移除的商品項目")
-            return
-    
-        for item in sel:
-            idx = self.tree_pur_cart.index(item)
-            if 0 <= idx < len(self.pur_cart_data):
-                del self.pur_cart_data[idx]
-            self.tree_pur_cart.delete(item)
-    
-    # [修正點]：呼叫統一更新函式
-        self.update_pur_cart_total()
 
 # [新增這個輔助函式]：統一計算並更新介面
     def update_pur_cart_total(self):
@@ -4917,7 +4992,8 @@ class SalesApp:
     @thread_safe_file
     def load_purchase_data(self):
         """ 載入最近進貨清單 """
-        for i in self.tree_purchase.get_children(): self.tree_purchase.delete(i)
+        for i in self.tree_purchase.get_children(): 
+            self.tree_purchase.delete(i)
         try:
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_PURCHASES)
             # 只顯示最近 20 筆
@@ -4930,7 +5006,8 @@ class SalesApp:
                     row['數量'],
                     row['物流追蹤編號']
                 ))
-        except: pass
+        except Exception: 
+            pass
 
     @thread_safe_file
     def action_update_pur_logistics(self):
@@ -4967,7 +5044,8 @@ class SalesApp:
             raw_remark = str(df_full.at[df_idx, '備註']).strip() if '備註' in df_full.columns else ""
 
             def clean_str(s):
-                if s.lower() in ["nan", "none", "nat", ""]: return ""
+                if s.lower() in ["nan", "none", "nat", ""]: 
+                    return ""
                 return s.lstrip("'")
 
             batch_list.append({
@@ -5012,7 +5090,8 @@ class SalesApp:
                 
                 # 顯示受影響的單號簡述，方便確認
                 ids_str = ", ".join(list(unique_order_ids)[:3]) # 只列前三筆
-                if len(unique_order_ids) > 3: ids_str += "..."
+                if len(unique_order_ids) > 3: 
+                    ids_str += "..."
                 ttk.Label(mixed_warn_f, 
                           text=f"(涉及單號: {ids_str})", 
                           foreground="#666", 
@@ -5076,7 +5155,8 @@ class SalesApp:
                              '時間_抵達集運倉', '時間_集運倉出貨', '時間_抵達台灣海關', '時間_國內配送中']
                 for df in [df_track, df_hist]:
                     for col in text_cols:
-                        if col not in df.columns: df[col] = ""
+                        if col not in df.columns: 
+                            df[col] = ""
                     df[text_cols] = df[text_cols].fillna("").astype(str).replace(['nan', 'NaN', 'None'], '')
 
                 for item in batch_list:
@@ -5095,7 +5175,8 @@ class SalesApp:
                     time_map = {"廠商已發貨": "時間_廠商出貨", "貨到集運倉": "時間_抵達集運倉", 
                                 "集運倉已發貨": "時間_集運倉出貨", "抵達台灣海關": "時間_抵達台灣海關", "國內配送中": "時間_國內配送中"}
                     col_name = time_map.get(var_status.get())
-                    if col_name: df_track.at[t_idx, col_name] = today_str
+                    if col_name: 
+                        df_track.at[t_idx, col_name] = today_str
 
                     h_mask = (df_hist['進貨單號'].str.replace("'", "").str.strip() == item['pur_id']) & \
                              (df_hist['商品名稱'].str.strip() == item['p_name'])
@@ -5103,7 +5184,8 @@ class SalesApp:
                         df_hist.loc[h_mask, '物流狀態'] = var_status.get()
                         df_hist.loc[h_mask, '物流追蹤'] = df_track.at[t_idx, '物流追蹤']
                         df_hist.loc[h_mask, '備註'] = var_custom_remark.get().strip()
-                        if col_name: df_hist.loc[h_mask, col_name] = today_str
+                        if col_name: 
+                            df_hist.loc[h_mask, col_name] = today_str
 
                 if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
                     messagebox.showinfo("成功", "物流資訊更新成功")
@@ -5121,7 +5203,8 @@ class SalesApp:
         # 找出該訂單的所有列
         subset = df[df['訂單編號'].astype(str).str.contains(clean_id)]
         
-        if subset.empty: return {}
+        if subset.empty: 
+            return {}
 
         # 定義需要找尋的標頭欄位
         header_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點', '扣費項目']
@@ -5142,7 +5225,8 @@ class SalesApp:
         """ 退貨單一商品：若刪除的是標頭行，自動將資訊傳承給下一筆商品 """
         from tkinter import simpledialog
         sel = self.tree_track.selection()
-        if not sel: return
+        if not sel: 
+            return
         
         item = self.tree_track.item(sel[0])
         idx = int(item['text']) # Excel 原始行號
@@ -5150,7 +5234,8 @@ class SalesApp:
         prod_name = str(item['values'][4])
 
         reason = simpledialog.askstring("退貨", f"商品: {prod_name}\n請輸入退貨原因:", parent=self.root)
-        if reason is None: return
+        if reason is None: 
+            return
 
         try:
             df_track = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
@@ -5174,19 +5259,23 @@ class SalesApp:
 
             # C. 執行移動
             df_track.drop(idx, inplace=True)
-            try: df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
-            except: df_returns = pd.DataFrame()
+            try: 
+                df_returns = pd.read_excel(FILE_NAME, sheet_name=SHEET_RETURNS)
+            except Exception:
+                df_returns = pd.DataFrame()
             
             # 存入退貨區前，確保退貨區的那一行資訊是完整的 (方便查帳)
             full_info = self._get_full_order_info(df_track, order_id) # 這裡要稍微注意邏輯順序
-            for col, val in full_info.items(): row_to_move[col] = val
+            for col, val in full_info.items(): 
+                row_to_move[col] = val
             row_to_move['備註'] = reason
 
             df_returns = pd.concat([df_returns, row_to_move], ignore_index=True)
 
             if self._universal_save({SHEET_TRACKING: df_track, SHEET_RETURNS: df_returns}):
                 messagebox.showinfo("成功", f"商品「{prod_name}」已移至退貨，資料已自動補位。")
-                self.load_tracking_data(); self.load_returns_data()
+                self.load_tracking_data()
+                self.load_returns_data()
         except Exception as e: 
             messagebox.showerror("錯誤", str(e))
 
@@ -5198,11 +5287,13 @@ class SalesApp:
         解決留白資料排序後掉到最底部的問題
         """
         sel = self.tree_track.selection()
-        if not sel: return
+        if not sel: 
+            return
         item = self.tree_track.item(sel[0])
         order_id = str(item['values'][0]).replace("'", "").strip()
 
-        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？"): return
+        if not messagebox.askyesno("結案確認", f"確定訂單 [{order_id}] 已完成？"): 
+            return
 
         try:
             # 1. 讀取追蹤與銷售紀錄
@@ -5211,7 +5302,7 @@ class SalesApp:
             
             try: 
                 df_sales = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
-            except: 
+            except Exception:
                 df_sales = pd.DataFrame()
 
             # --- [核心修正步驟 A：處理舊有銷售紀錄，防止排序斷鏈] ---
@@ -5319,16 +5410,20 @@ class SalesApp:
             # 3. 核心數據清洗 (您原本的高階邏輯)
             text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名']
             for sn, df in all_data.items():
-                if df is None or df.empty: continue
+                if df is None or df.empty: 
+                    continue
                 df = df.fillna("")
                 for col in df.columns:
                     if col in text_protection_cols:
                         def clean_logic(x):
                             s = str(x).strip()
-                            if s.lower() in ['nan', 'none', '', 'nat']: return ""
-                            if s.endswith('.0'): s = s[:-2]
+                            if s.lower() in ['nan', 'none', '', 'nat']: 
+                                return ""
+                            if s.endswith('.0'): 
+                                s = s[:-2]
                             s = s.lstrip("'")
-                            if col in ['訂單編號', '進貨單號', '物流追蹤']: return f"'{s}"
+                            if col in ['訂單編號', '進貨單號', '物流追蹤']: 
+                                return f"'{s}"
                             return s
                         df[col] = df[col].apply(clean_logic)
                 
@@ -5363,13 +5458,15 @@ class SalesApp:
 
         except PermissionError:
             messagebox.showerror("存檔失敗", "Excel 檔案正被其他程式開啟中，請先關閉 Excel!")
-            if os.path.exists(temp_file): os.remove(temp_file)
+            if os.path.exists(temp_file): 
+                os.remove(temp_file)
             return False
         except Exception as e:
             import traceback
             traceback.print_exc()
             messagebox.showerror("嚴重錯誤", f"存檔引擎故障: {str(e)}")
-            if os.path.exists(temp_file): os.remove(temp_file)
+            if os.path.exists(temp_file): 
+                os.remove(temp_file)
             return False
     
 
@@ -5393,8 +5490,10 @@ class SalesApp:
 
     def filter_cities(self, event):
         typed = self.var_cust_loc.get()
-        if typed == '': self.combo_loc['values'] = TAIWAN_CITIES
-        else: self.combo_loc['values'] = [i for i in TAIWAN_CITIES if typed in i]
+        if typed == '': 
+            self.combo_loc['values'] = TAIWAN_CITIES
+        else: 
+            self.combo_loc['values'] = [i for i in TAIWAN_CITIES if typed in i]
 
     def on_ship_method_change(self, event):
         method = self.var_ship_method.get()
@@ -5447,7 +5546,7 @@ class SalesApp:
             try:
                 temp = display_str.rsplit(" (庫存:", 1)[0]
                 selected_name = temp.split("]")[-1].strip() if "]" in temp else temp
-            except:
+            except Exception:
                 selected_name = display_str 
 
             self.var_sel_name.set(selected_name)
@@ -5459,7 +5558,8 @@ class SalesApp:
                 # --- 讀取編號並處理空值 ---
                 raw_sku = record.iloc[0].get('商品編號', '')
                 sku = str(raw_sku) if pd.notna(raw_sku) else ""
-                if sku.lower() == "nan": sku = "" # 移除 pandas 的 nan 噪音
+                if sku.lower() == "nan": 
+                    sku = "" # 移除 pandas 的 nan 噪音
                 
                 # 這裡就是剛才報錯的地方，現在 self.var_sel_sku 已經在 __init__ 定義好了
                 self.var_sel_sku.set(sku) 
@@ -5467,7 +5567,7 @@ class SalesApp:
                 self.var_sel_cost.set(record.iloc[0]['預設成本'])
                 try: 
                     stock = int(record.iloc[0]['目前庫存'])
-                except: 
+                except Exception: 
                     stock = 0
                 self.var_sel_stock_info.set(str(stock)) 
                 self.var_sel_price.set(0) # 清空上次售價
@@ -5476,7 +5576,8 @@ class SalesApp:
     def add_to_cart(self):
         name = self.var_sel_name.get()
         sku = self.var_sel_sku.get() # 這裡讀取剛才存進去的編號
-        if not name: return
+        if not name: 
+            return
         
         # 容錯：如果沒編號顯示 --
         display_sku = sku if sku.strip() != "" else "--"
@@ -5485,7 +5586,8 @@ class SalesApp:
             qty = self.var_sel_qty.get()
             cost = self.var_sel_cost.get()
             price = self.var_sel_price.get()
-            if qty <= 0: return
+            if qty <= 0: 
+                return
 
             total_sales = price * qty
             total_cost = cost * qty
@@ -5513,7 +5615,8 @@ class SalesApp:
 
     def remove_from_cart(self):
         sel = self.tree.selection()
-        if not sel: return
+        if not sel: 
+            return
         for item in sel:
             idx = self.tree.index(item)
             del self.cart_data[idx]
@@ -5561,14 +5664,20 @@ class SalesApp:
             else:
                 try:
                     clean_input = selection.replace("%", "")
-                    if clean_input: d_rate = Decimal(clean_input)
-                except: d_rate = Decimal("0.00")
+                    if clean_input: 
+                        d_rate = Decimal(clean_input)
+                except Exception: 
+                    d_rate = Decimal("0.00")
 
             # 3. 獲取運費與額外折扣
-            try: d_ship = Decimal(str(self.var_ship_fee.get()))
-            except: d_ship = Decimal("0.00")
-            try: d_extra = Decimal(str(self.var_extra_fee.get()))
-            except: d_extra = Decimal("0.00")
+            try: 
+                d_ship = Decimal(str(self.var_ship_fee.get()))
+            except Exception: 
+                d_ship = Decimal("0.00")
+            try: 
+                d_extra = Decimal(str(self.var_extra_fee.get()))
+            except Exception: 
+                d_extra = Decimal("0.00")
 
             payer = self.var_ship_payer.get()
             
@@ -5605,18 +5714,21 @@ class SalesApp:
     @thread_safe_file
     def submit_order(self):
         """ 修正版：使用 Decimal 高精度分攤手續費並存入追蹤區 """
-        if not self.cart_data: return
+        if not self.cart_data: 
+            return
         
         if self.var_enable_cust.get():
             cust_name = self.var_cust_name.get().strip()
             if not cust_name:
                 messagebox.showerror("欄位缺失", "請務必輸入『買家名稱』！")
-                self.entry_cust_name.focus(); return
+                self.entry_cust_name.focus() 
+                return
             cust_loc = self.var_cust_loc.get().strip()
             ship_method = self.var_ship_method.get()
             platform_name = self.var_platform.get()
         else:
-            cust_name = cust_loc = ship_method = "未提供"; platform_name = "零售/現場"
+            cust_name = cust_loc = ship_method = "未提供"
+            platform_name = "零售/現場"
             
         date_str = self.var_date.get().strip()
         order_id = datetime.now().strftime("%Y%m%d%H%M%S") 
@@ -5626,8 +5738,10 @@ class SalesApp:
         t_sales, t_fee, t_tax = self.update_totals() 
         
         fee_tag = self.var_fee_tag.get()
-        try: d_extra = Decimal(str(self.var_extra_fee.get()))
-        except: d_extra = Decimal("0")
+        try:
+            d_extra = Decimal(str(self.var_extra_fee.get()))
+        except Exception:
+            d_extra = Decimal("0")
 
         final_fee_tag = fee_tag if d_extra > Decimal("0") else ""
 
@@ -5684,8 +5798,10 @@ class SalesApp:
 
 
             # 讀取並合併追蹤表
-            try: df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-            except: df_track_existing = pd.DataFrame()
+            try: 
+                df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
+            except Exception:
+                df_track_existing = pd.DataFrame()
 
             df_new_batch = pd.DataFrame(rows)
             df_new_batch['訂單編號'] = df_new_batch['訂單編號'].apply(lambda x: f"'{x}")
@@ -5703,7 +5819,8 @@ class SalesApp:
 
                 # 重置 UI
                 self.cart_data = []
-                for i in self.tree.get_children(): self.tree.delete(i)
+                for i in self.tree.get_children(): 
+                    self.tree.delete(i)
                 
                 # 重置顧客與費用欄位
                 self.var_cust_name.set("")
@@ -5732,8 +5849,10 @@ class SalesApp:
                 p_name = str(row['商品名稱'])
                 p_tag = str(row['分類Tag']) if pd.notna(row['分類Tag']) else "無"
                 
-                try: p_stock = int(row['目前庫存'])
-                except: p_stock = 0
+                try: 
+                    p_stock = int(row['目前庫存'])
+                except Exception:
+                    p_stock = 0
                 
                 display_str = f"[{p_tag}] {p_name} (庫存: {p_stock})"
                 
@@ -5865,22 +5984,31 @@ class SalesApp:
     @thread_safe_file
     def submit_update_product(self):
         name = self.var_upd_name.get()
-        if not name: return
+        if not name:
+            return
         
         try:
             # --- [安全數值抓取] ---
             # 使用 try-except 確保即使介面上有 NaN 字樣，程式也不會崩潰
-            try: new_cost = float(self.var_upd_cost.get())
-            except: new_cost = 0.0
+            try:
+                new_cost = float(self.var_upd_cost.get())
+            except Exception:
+                new_cost = 0.0
             
-            try: new_stock = int(self.var_upd_stock.get())
-            except: new_stock = 0
+            try:
+                new_stock = int(self.var_upd_stock.get())
+            except Exception:
+                new_stock = 0
 
-            try: new_safety = int(self.var_upd_safety.get())
-            except: new_safety = 0
+            try:
+                new_safety = int(self.var_upd_safety.get())
+            except Exception:
+                new_safety = 0
 
-            try: new_weight = float(self.var_upd_weight.get())
-            except: new_weight = 1.0
+            try:
+                new_weight = float(self.var_upd_weight.get())
+            except Exception:
+                new_weight = 1.0
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             
@@ -5892,7 +6020,8 @@ class SalesApp:
             if not idx.empty:
                 # 取得舊庫存 (處理可能的 NaN)
                 old_stock = df_prods.loc[idx, '目前庫存'].values[0]
-                if pd.isna(old_stock): old_stock = 0
+                if pd.isna(old_stock):
+                    old_stock = 0
                 
                 # --- [補齊舊資料欄位/補貨邏輯] ---
                 if "初始上架時間" not in df_prods.columns: 
@@ -5937,9 +6066,11 @@ class SalesApp:
     @thread_safe_file
     def delete_product(self):
         name = self.var_upd_name.get()
-        if not name: return
+        if not name:
+            return
         confirm = messagebox.askyesno("確認刪除", f"確定要刪除「{name}」嗎？\n\n此動作無法復原！")
-        if not confirm: return
+        if not confirm:
+            return
         try:
             df_old = pd.read_excel(FILE_NAME, sheet_name='商品資料')
             df_new = df_old[df_old['商品名稱'] != name]
@@ -5955,7 +6086,8 @@ class SalesApp:
             self.var_upd_stock.set(0)
             self.var_upd_time.set("尚無資料")
             messagebox.showinfo("成功", f"已刪除商品：{name}")
-        except PermissionError: messagebox.showerror("錯誤", "Excel 未關閉！")
+        except PermissionError: 
+            messagebox.showerror("錯誤", "Excel 未關閉！")
 
 
 
