@@ -3007,8 +3007,6 @@ class SalesApp:
         ttk.Button(btn_area, text="✔ 送出訂單", command=self.submit_order).pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         # 新增還原按鈕
-        self.btn_undo_sales = ttk.Button(btn_area, text="↩️ 還原上一步", command=self.action_perform_undo)
-        self.btn_undo_sales.pack(side="left", fill="x", expand=True)
 
         self.refresh_fee_tree()
 
@@ -3343,14 +3341,14 @@ class SalesApp:
         # 第一行：修改與刪除
         row1 = ttk.Frame(btn_main_frame)
         row1.pack(fill="x", pady=2)
-        ttk.Button(row1, text="✏️ 修改數量/售價", command=self.action_track_modify).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1, text="↩️ 撤銷/還原上一步",command=self.action_perform_undo).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row1, text="➖ 刪除單一商品 (補位)", command=self.action_track_delete_item).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row1, text="🗑️ 刪除整筆訂單", command=self.action_track_delete_order).pack(side="left", fill="x", expand=True, padx=2)
 
         # 第二行：結案與退貨
         row2 = ttk.Frame(btn_main_frame)
         row2.pack(fill="x", pady=2)
-        ttk.Button(row2, text="↩️ 退貨單一商品", command=self.action_track_return_item).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row2, text="⬅️ 退貨單一商品", command=self.action_track_return_item).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row2, text="⏪ 退貨整筆訂單", command=self.action_track_return_order).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row2, text="✅ 完成訂單 (整筆結案)", command=self.action_track_complete_order).pack(side="left", fill="x", expand=True, padx=2)
 
@@ -3418,49 +3416,6 @@ class SalesApp:
                 
         except Exception as e:
             print(f"system: failed to load tracking list: {e}")
-
-
-    @thread_safe_file
-    def action_track_modify(self):
-        """ 修改資料: 跳出視窗修改數量與價格 """
-        sel = self.tree_track.selection()
-        if not sel:
-            messagebox.showwarning("提示", "請先選擇要修改的商品項目")
-            return
-        item = self.tree_track.item(sel[0])
-        idx = int(item['text'])
-        vals = item['values']
-        prod_name = vals[4]
-        old_qty = vals[5]
-        old_price = vals[6]
-        win = tk.Toplevel(self.root)
-        win.title(f"修改: {prod_name}")
-        win.geometry("300x200")
-        tk.Label(win, text="數量:").pack(pady=5)
-        var_qty = tk.IntVar(value=old_qty)
-        tk.Entry(win, textvariable=var_qty).pack()
-        tk.Label(win, text="售價:").pack(pady=5)
-        var_price = tk.DoubleVar(value=old_price)
-        tk.Entry(win, textvariable=var_price).pack()
-        def save_mod():
-            try:
-                df = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
-                new_qty = var_qty.get()
-                new_price = var_price.get()
-                df.at[idx, '數量'] = new_qty
-                df.at[idx, '單價(售)'] = new_price
-                cost = df.at[idx, '單價(進)']
-                fee = df.at[idx, '分攤手續費']
-                df.at[idx, '總銷售額'] = new_qty * new_price
-                df.at[idx, '總成本'] = new_qty * cost
-                df.at[idx, '總淨利'] = (new_qty * new_price) - (new_qty * cost) - fee
-                self._universal_save({ SHEET_TRACKING: df })
-                messagebox.showinfo("成功", "資料已更新")
-                self.load_tracking_data()
-                win.destroy()
-            except Exception as e:
-                messagebox.showerror("錯誤", f"存檔失敗: {e}")
-        tk.Button(win, text="確認修改", command=save_mod).pack(pady=15)
 
 
 
