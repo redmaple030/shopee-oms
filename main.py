@@ -419,14 +419,12 @@ class LoginWindow:
 
 
 
-
-
 class SalesApp:
     
     def __init__(self, root):
         self.root = root
         self.root.title("蝦皮/網拍進銷存系統 (正式版)")
-        self.root.geometry("1280x850") 
+        self.root.geometry("1280x900") 
         self.var_shop_name = tk.StringVar(value="商店名稱") # 預設名稱
         self.file_lock = threading.RLock() # 建立一個全域執行緒鎖 互斥鎖 (Lock)：防止多個線程同時動同一個檔案。
 
@@ -5400,7 +5398,7 @@ class SalesApp:
 
 
     @thread_safe_file
-    def _universal_save(self, updates_dict):
+    def _universal_save(self, updates_dict,is_undo=False):
         import copy
 
         """ 
@@ -5428,10 +5426,8 @@ class SalesApp:
 
             # --- [核心修改：在套用更新前，備份目前的完整狀態] ---
             # 我們使用 deepcopy 確保備份的是真正的資料，而不是記憶體位置
-            if updates_dict:
-                # 備份資料
-                self.undo_buffer = copy.deepcopy(all_data) 
-                # 備份更動的分頁清單
+            if updates_dict and not is_undo:
+                self.undo_buffer = copy.deepcopy(all_data)
                 self.undo_pages = list(updates_dict.keys())
             # -----------------------------------------------
             
@@ -5537,7 +5533,7 @@ class SalesApp:
             self.undo_buffer = None  # 防止重複還原
             self.undo_pages = []
 
-            if self._universal_save(old_snapshot):
+            if self._universal_save(old_snapshot, is_undo=True):
                 # 強制刷新所有記憶體資料與介面
                 self.products_df = self.load_products()
                 self.update_sales_prod_list()
@@ -6106,10 +6102,13 @@ class SalesApp:
                     old_stock = 0
                 
                 # --- [補齊舊資料欄位/補貨邏輯] ---
-                if "初始上架時間" not in df_prods.columns: 
-                    df_prods["初始上架時間"] = df_prods["最後更新時間"]
+                if "初始上架時間" not in df_prods.columns:
+                    df_prods["初始上架時間"] = "" # 先建立空欄位
                 if "最後進貨時間" not in df_prods.columns: 
                     df_prods["最後進貨時間"] = df_prods["最後更新時間"]
+
+                mask_empty = df_prods["初始上架時間"].isna() | (df_prods["初始上架時間"] == "")
+                df_prods.loc[mask_empty, "初始上架時間"] = df_prods.loc[mask_empty, "最後更新時間"]
 
                 if new_stock > old_stock:
                     df_prods.loc[idx, '最後進貨時間'] = now_str
