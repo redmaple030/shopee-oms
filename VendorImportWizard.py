@@ -48,7 +48,7 @@ class VendorImportWizard(tk.Toplevel):
         paned.pack(fill="both", expand=True, padx=20)
 
         # 左側預覽
-        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽", padding=5)
+        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽--請將要匯入的資料放在excel第一個分頁" , padding=5)
         paned.add(left_f, weight=3)
         if Sheet:
             self.sheet = Sheet(left_f, data=[[]], show_row_index=True)

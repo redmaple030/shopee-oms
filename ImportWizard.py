@@ -56,7 +56,7 @@ class ImportWizard(tk.Toplevel):
         paned.pack(fill="both", expand=True, padx=20)
 
         # --- 左側：回歸本來的表格 UI ---
-        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽 (tksheet)", padding=5)
+        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽--請將要匯入的資料放在excel第一個分頁", padding=5)
         paned.add(left_f, weight=3)
         
         if Sheet:
