@@ -1,4 +1,4 @@
-#shopee-oms 5.5 完整版
+#shopee-oms 5.7 完整版
 
 import json
 import sys
@@ -16,6 +16,7 @@ from ShippingWizard import show_shipping_dialog
 from decimal import Decimal, ROUND_HALF_UP
 import platform
 import uuid
+
 
 
 
@@ -568,6 +569,9 @@ class SalesApp:
 
 
         self.var_sel_sku = tk.StringVar() # 用於暫存銷售頁面選中商品的編號
+
+        # --- [新增：還原緩衝區] ---
+        self.undo_buffer = None  # 用來存放上一次「完整」的資料字典
 
       
     # 處理十進制運算
@@ -1437,6 +1441,8 @@ class SalesApp:
         ttk.Button(btn_ctrl, text="⚖️ 整單運費稅金自動分攤", command=self.action_batch_distribute_shipping).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="✅ 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="❌ 標記遺失/取消進貨", command=self.action_cancel_purchase).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="↩️ 還原上一步", command=self.action_perform_undo).pack(side="right", padx=10)
+
 
         
         self.load_purchase_tracking()
@@ -2999,7 +3005,12 @@ class SalesApp:
         btn_area = ttk.Frame(sum_frame)
         btn_area.pack(fill="x", pady=5)
         
-        ttk.Button(sum_frame, text="✔ 送出訂單", command=self.submit_order).pack(fill="x", pady=5)
+        # 將送出按鈕稍微縮短，旁邊放還原按鈕
+        ttk.Button(btn_area, text="✔ 送出訂單", command=self.submit_order).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # 新增還原按鈕
+        self.btn_undo_sales = ttk.Button(btn_area, text="↩️ 還原上一步", command=self.action_perform_undo)
+        self.btn_undo_sales.pack(side="left", fill="x", expand=True)
 
         self.refresh_fee_tree()
 
@@ -3168,9 +3179,13 @@ class SalesApp:
             ttk.Label(self.frame_left, text="商品備註:").pack(anchor="w")
             ttk.Entry(self.frame_left, textvariable=self.var_add_remarks).pack(fill="x", pady=2)
 
-        ttk.Button(self.frame_left, text="✅ 完成建檔", command=self.submit_new_product).pack(fill="x", pady=15)
+        btn_add_f = ttk.Frame(self.frame_left)
+        btn_add_f.pack(fill="x", pady=15)
 
-
+        ttk.Button(btn_add_f, text="✅ 完成建檔", command=self.submit_new_product).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        # 增加還原按鈕
+        ttk.Button(btn_add_f, text="↩️ 還原上一步", command=self.action_perform_undo).pack(side="left", padx=(2, 0))
+        
         ttk.Separator(self.frame_left, orient="horizontal").pack(fill="x", pady=10)
         
         ttk.Label(self.frame_left, text="📂 外部資料批次處理", font=("", 10, "bold")).pack(anchor="w")
@@ -3746,8 +3761,12 @@ class SalesApp:
         ttk.Label(after_frame, text="售後說明:").grid(row=4, column=0, **a_opts)
         ttk.Entry(after_frame, textvariable=self.var_after_remark, width=25).grid(row=4, column=1, **a_opts)
 
-        btn_after = ttk.Button(after_frame, text="🚀 提交售後紀錄", command=self.submit_after_sales)
-        btn_after.grid(row=5, column=0, columnspan=2, pady=10)
+        btn_action_f = ttk.Frame(after_frame)
+        btn_action_f.grid(row=5, column=0, columnspan=2, pady=10)
+
+        ttk.Button(btn_action_f, text="🚀 提交售後紀錄", command=self.submit_after_sales).pack(side="left", padx=5)
+        # 增加還原按鈕
+        ttk.Button(btn_action_f, text="↩️ 還原上一步", command=self.action_perform_undo).pack(side="left", padx=5)
 
         self.load_sales_records_for_edit()
 
@@ -4507,7 +4526,7 @@ class SalesApp:
         lbl_title = ttk.Label(header_frame, text="蝦皮/網拍智慧進銷存管理系統", font=("微軟正黑體", 20, "bold"))
         lbl_title.pack(anchor="center")
         
-        lbl_version = ttk.Label(header_frame, text="Version 5.4 (採購決策優化版)", font=("Consolas", 11), foreground="gray")
+        lbl_version = ttk.Label(header_frame, text="Version 5.7 (採購決策優化版)", font=("Consolas", 11), foreground="gray")
         lbl_version.pack(anchor="center")
 
         # --- 中間：功能簡介與開發者資訊 ---
@@ -4523,7 +4542,9 @@ class SalesApp:
             "● 供應商績效評鑑體系：實作動態 KPI 權重引擎，針對品質、備貨、滿足率及運輸時效進行量化分析。",
             "● 智慧採購需求分析：結合商品銷售速率 (Velocity) 與前置時間 (Lead Time) 建立 ROP 補貨模型。",
             "● 資料防禦機制：實作萬用存檔引擎 (Universal Save Engine) 與標頭繼承算法，確保數據原子性。",
-            "● 混合雲資安防護架構：整合 Google Drive API 雲端冗餘備份，並採用 SHA-256 加密認證與金鑰隔離。"
+            "● 事務級一鍵還原機制：(V5.7新功能) 實作記憶體快照回溯技術，支援誤輸入之進銷存資料全分頁同步恢復。",
+            "● 硬體指紋與混合雲防護：整合 Google Drive 備份，並採用設備識別碼 (Hardware ID) 綁定技術強化授權安全性。"
+
         ]
         for f in features:
             ttk.Label(left_box, text=f, font=("微軟正黑體", 11)).pack(anchor="w", pady=4)
@@ -4555,10 +4576,14 @@ class SalesApp:
         log_text.pack(fill="x")
         
         logs = (
+            "[2026-03-18] V5.7: 實作事務級「一鍵還原」功能。支援進貨、銷售、設定等全分頁快照回溯，大幅提升系統容錯性。\n"
+            "[2026-03-17] V5.6: 修正 Win/Mac 跨平台 UI 兼容性問題；優化 Google Drive 雲端備份驗證管線。\n"
+            "[2026-03-12] V5.5: 實作原子性寫入 (Atomic Write) 與 .bak 冗餘備份；導入硬體指紋識別替代舊版路徑綁定。\n"
+            "[2026-03-07] V5.2: 廠商評估系統支援自定義開關；修正浮點數計算溢出錯誤；優化商品清單自然排序邏輯。\n"
             "[2026-03-04] V5.1: 實作動態 KPI 權重引擎、導入 Decimal 高精度財務運算、強化數據清洗管線與防呆機制。\n"
-            "[2026-03-02] V5.0: 資料儲存架構解耦重構（手續費與系統設定分離）、新增廠商資料批次匯入精靈 (Vendor Wizard)。\n"
+            "[2026-03-02] V5.0: 資料儲存架構解耦重構（手續費與系統設定分離）、新增廠商資料批次匯入精靈。\n"
             "[2026-02-28] V4.8: 新增 SHA-256 系統啟動認證介面、實作進貨模組『批次複選』與『異步狀態同步』功能。\n"
-            "[2026-02-24] V4.6: 建立廠商績效評鑑體系 (質/備/運)、優化跨境物流多節點追蹤與自動化狀態更動紀錄。\n"
+            "[2026-02-24] V4.6: 建立廠商績效評鑑體系 (質/備/運)、優化跨境物流多節點追蹤機制。\n"
             "[2026-02-08] V4.3: 引入採購需求分析模組 (ROP 模型)、優化商品銷售速率計算與回溯算法。\n"
             "[2026-02-05] V4.2: 進貨與銷售端同步支援『內含營業稅 (5%)』回推運算邏輯。\n"
             "[2026-02-02] V4.1: 進貨管理全面單據化，支援批量入庫驗收與加權平均成本 (WAC) 公式。\n"
@@ -5376,11 +5401,14 @@ class SalesApp:
 
     @thread_safe_file
     def _universal_save(self, updates_dict):
+        import copy
+
         """ 
-        終極防禦版萬用存檔引擎：
+        更新 還原功能
         1. 執行緒鎖 (Thread Lock)：防止併發衝突。
         2. 原子性寫入 (Atomic Write)：使用臨時檔置換，防止寫入中斷導致檔案毀損。
         3. 資料校準 (Data Scrubbing)：消滅 nan,保護 ID 格式。
+
         """
     
         # 拆解路徑，確保 temp_ 只加在「檔名」前面，而不是整個路徑前面
@@ -5397,6 +5425,15 @@ class SalesApp:
                 with pd.ExcelFile(FILE_NAME) as xls:
                     for sn in xls.sheet_names:
                         all_data[sn] = pd.read_excel(xls, sheet_name=sn)
+
+            # --- [核心修改：在套用更新前，備份目前的完整狀態] ---
+            # 我們使用 deepcopy 確保備份的是真正的資料，而不是記憶體位置
+            if updates_dict:
+                # 備份資料
+                self.undo_buffer = copy.deepcopy(all_data) 
+                # 備份更動的分頁清單
+                self.undo_pages = list(updates_dict.keys())
+            # -----------------------------------------------
             
             # 2. 更新資料並進行保護
             for sheet_name, df in updates_dict.items():
@@ -5468,6 +5505,51 @@ class SalesApp:
             if os.path.exists(temp_file): 
                 os.remove(temp_file)
             return False
+        
+
+    @thread_safe_file
+    def action_perform_undo(self):
+        """ 智慧型還原：列出詳細更動並恢復資料 """
+        if self.undo_buffer is None or not self.undo_pages:
+            messagebox.showwarning("提示", "目前沒有可還原的紀錄（可能剛啟動、已還原過、或上次存檔失敗）。")
+            return
+
+        # 分頁名稱對照表 (讓提示更人性化)
+        mapping = {
+            SHEET_PRODUCTS: "📦 商品庫存與基本資料",
+            SHEET_SALES: "💰 歷史銷售紀錄(售後狀態)",
+            SHEET_TRACKING: "📑 訂單追蹤緩衝區",
+            SHEET_PURCHASES: "📖 進貨歷史總表",
+            SHEET_PUR_TRACKING: "🚚 在途進貨追蹤",
+            SHEET_VENDORS: "🏢 廠商績效資料",
+            SHEET_FEES: "💲 手續費與平台設定"
+        }
+
+        # 組合提示訊息
+        change_text = "\n".join([f"• {mapping.get(p, p)}" for p in self.undo_pages])
+        confirm_msg = f"您確定要撤銷上一步操作嗎？\n\n這將還原以下受影響的資料清單：\n{change_text}\n\n※ 還原後，您剛剛的輸入將被抹除。"
+
+        if not messagebox.askyesno("確認撤銷", confirm_msg):
+            return
+
+        try:
+            old_snapshot = self.undo_buffer
+            self.undo_buffer = None  # 防止重複還原
+            self.undo_pages = []
+
+            if self._universal_save(old_snapshot):
+                # 強制刷新所有記憶體資料與介面
+                self.products_df = self.load_products()
+                self.update_sales_prod_list()
+                self.update_mgmt_prod_list()
+                self.load_tracking_data()
+                self.load_purchase_tracking()
+                self.load_sales_records_for_edit() # 售後頁面刷新
+                self.calculate_analysis_data()
+                
+                messagebox.showinfo("成功", "已成功還原至上一步狀態！")
+        except Exception as e:
+            messagebox.showerror("還原失敗", str(e))
     
 
     def load_existing_tags(self, event=None):
