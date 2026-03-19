@@ -19,6 +19,7 @@ import uuid
 from LogisticsWizard import LogisticsWizard
 from ImportWizard import ImportWizard
 from ShippingWizard import show_shipping_dialog
+from ShippingDistributor import ShippingDistributor
 
 
 
@@ -1450,114 +1451,8 @@ class SalesApp:
     @thread_safe_file
     def action_batch_distribute_shipping(self):
         """ 彈出視窗：輸入整筆單據的總運費/稅金，並依重量權重自動分攤 """
-        sel = self.tree_pur_track.selection()
-        if not sel:
-            messagebox.showwarning("提示", "請先選擇該訂單中的任意一個商品項目")
-            return
-            
-        item = self.tree_pur_track.item(sel[0])
-        target_pur_id = str(item['values'][0]).replace("'", "").strip()
+        ShippingDistributor(self.root, self)
 
-        win = tk.Toplevel(self.root)
-        win.title(f"整單運費分攤 - {target_pur_id}")
-        win.geometry("400x300")
-        win.grab_set()
-
-        ttk.Label(win, text=f"正在處理單號: {target_pur_id}", foreground="blue").pack(pady=10)
-        
-        body = ttk.Frame(win, padding=20)
-        body.pack(fill="both")
-
-        ttk.Label(body, text="這箱貨物的「總運費」($):").pack(anchor="w")
-        var_total_ship = tk.DoubleVar(value=0.0)
-        ttk.Entry(body, textvariable=var_total_ship).pack(fill="x", pady=5)
-
-        ttk.Label(body, text="這箱貨物的「總稅金」($):").pack(anchor="w", pady=(10,0))
-        var_total_tax = tk.DoubleVar(value=0.0)
-        ttk.Entry(body, textvariable=var_total_tax).pack(fill="x", pady=5)
-
-
-        
-        def calculate_and_save():
-            try:
-                total_s = var_total_ship.get()
-                total_t = var_total_tax.get()
-                
-                with pd.ExcelFile(FILE_NAME) as xls:
-                    df_track = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
-                    df_hist = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
-                    df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
-
-                # --- [核心修正 1：強制轉型為浮點數] ---
-                # 這樣就不會再出現 "Invalid value for dtype int64" 的錯誤
-                for df in [df_track, df_hist]:
-                    for col in ['分攤運費', '海關稅金']:
-                        if col not in df.columns: 
-                            df[col] = 0.0
-                        # 關鍵：先轉成 numeric (處理 NaN)，再強制轉成 float 類型
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
-                
-                # 商品資料的權重也要確保是數字
-                if '單位權重' not in df_prods.columns: 
-                    df_prods['單位權重'] = 1.0
-                df_prods['單位權重'] = pd.to_numeric(df_prods['單位權重'], errors='coerce').fillna(1.0).astype(float)
-
-                # 建立重量地圖
-                weight_map = df_prods.set_index('商品名稱')['單位權重'].to_dict()
-
-                # 清理匹配用的 ID
-                df_track['tmp_id'] = df_track['進貨單號'].astype(str).str.replace("'", "").str.strip()
-                mask = df_track['tmp_id'] == target_pur_id
-                
-                # 1. 計算總權重
-                order_total_weight = 0
-                for _, row in df_track[mask].iterrows():
-                    p_name = str(row['商品名稱']).strip()
-                    qty = float(row.get('數量', 1))
-                    u_weight = weight_map.get(p_name, 1.0)
-                    order_total_weight += (qty * u_weight)
-
-                if order_total_weight == 0: 
-                    order_total_weight = 1
-
-                # 2. 開始分配 (小數點保留至第一位)
-                for idx in df_track[mask].index:
-                    p_name = str(df_track.at[idx, '商品名稱']).strip()
-                    qty = float(df_track.at[idx, '數量'])
-                    u_weight = weight_map.get(p_name, 1.0)
-                    
-                    share_ratio = (qty * u_weight) / order_total_weight
-                    
-                    # --- [核心修正 2：保留小數點第一位] ---
-                    alloc_s = round(total_s * share_ratio, 1)
-                    alloc_t = round(total_t * share_ratio, 1)
-
-                    df_track.at[idx, '分攤運費'] = alloc_s
-                    df_track.at[idx, '海關稅金'] = alloc_t
-                    
-                    # 同步歷史總表
-                    df_hist['tmp_id'] = df_hist['進貨單號'].astype(str).str.replace("'", "").str.strip()
-                    h_mask = (df_hist['tmp_id'] == target_pur_id) & (df_hist['商品名稱'].astype(str).str.strip() == p_name)
-                    
-                    # 確保歷史總表的欄位也接受浮點數
-                    df_hist.loc[h_mask, '分攤運費'] = alloc_s
-                    df_hist.loc[h_mask, '海關稅金'] = alloc_t
-
-                # 存檔前清理
-                df_track.drop(columns=['tmp_id'], inplace=True, errors='ignore')
-                df_hist.drop(columns=['tmp_id'], inplace=True, errors='ignore')
-                
-                if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
-                    messagebox.showinfo("成功", "分攤完畢！\n已將運費與稅金分配至各品項 (保留1位小數)")
-                    self.load_purchase_tracking()
-                    win.destroy()
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                messagebox.showerror("計算失敗", f"發生型別錯誤: {str(e)}\n請檢查 Excel 欄位格式。")
-
-        ttk.Button(win, text="🚀 開始自動分攤並儲存", command=calculate_and_save).pack(pady=20)
 
 
 
