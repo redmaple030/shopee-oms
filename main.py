@@ -11,13 +11,14 @@ import re
 import pickle
 import threading 
 import hashlib
-from ImportWizard import ImportWizard
-from ShippingWizard import show_shipping_dialog
 from decimal import Decimal, ROUND_HALF_UP
 import platform
 import uuid
 
 
+from LogisticsWizard import LogisticsWizard
+from ImportWizard import ImportWizard
+from ShippingWizard import show_shipping_dialog
 
 
 
@@ -4987,192 +4988,12 @@ class SalesApp:
         except Exception: 
             pass
 
+
     @thread_safe_file
     def action_update_pur_logistics(self):
-        """ 
-        物流維護 V6.9 (跨單偵測強化版)
-        1. 針對多筆選取，在視窗最上方顯示紅字警告。
-        2. [核心新增]：偵測是否選到不同訂單號，若是則顯示橘色警告。
-        """
-        selected_items = self.tree_pur_track.selection()
-        if not selected_items:
-            messagebox.showwarning("提示", "請先選擇商品項目")
-            return
-
-        # 讀取完整資料表
-        try:
-            df_full = pd.read_excel(FILE_NAME, sheet_name=SHEET_PUR_TRACKING)
-        except Exception as e:
-            messagebox.showerror("錯誤", f"讀取追蹤表失敗: {e}")
-            return
-
-        batch_list = []
-        unique_order_ids = set() # 用於儲存不重複的單號
-
-        for item_id in selected_items:
-            item_data = self.tree_pur_track.item(item_id)
-            vals = item_data['values']
-            df_idx = int(item_data['text'])
-            
-            p_id = str(vals[0]).replace("'", "").strip() # 取得單號
-            unique_order_ids.add(p_id) # 加入集合
-
-            # 抓取並清理欄位
-            raw_logi = str(df_full.at[df_idx, '物流追蹤']).strip() if '物流追蹤' in df_full.columns else ""
-            raw_remark = str(df_full.at[df_idx, '備註']).strip() if '備註' in df_full.columns else ""
-
-            def clean_str(s):
-                if s.lower() in ["nan", "none", "nat", ""]: 
-                    return ""
-                return s.lstrip("'")
-
-            batch_list.append({
-                "df_idx": df_idx, 
-                "p_name": str(vals[2]).strip(),
-                "pur_id": p_id,
-                "qty": int(vals[3]),
-                "status": str(vals[7]),
-                "logi_id": clean_str(raw_logi),
-                "remark": clean_str(raw_remark)
-            })
-
-        is_batch = len(batch_list) > 1
-        is_mixed_orders = len(unique_order_ids) > 1 # 判斷是否包含複數訂單
-        
-        win = tk.Toplevel(self.root)
-        win.title("📦 物流批次維護" if is_batch else "物流維護")
-        win.geometry("500x720") # 稍微增加高度
-        win.grab_set()
-
-        # --- [頂部提示區塊：動態警告邏輯] ---
-        header_warning_f = ttk.Frame(win, padding=10)
-        header_warning_f.pack(fill="x")
-
-        if is_batch:
-            # 1. 基礎複選警告
-            lbl_warn = ttk.Label(header_warning_f, 
-                                 text=f"⚠️ 注意：目前已選取 {len(batch_list)} 筆商品", 
-                                 foreground="red", 
-                                 font=("微軟正黑體", 12, "bold"))
-            lbl_warn.pack(anchor="center")
-            
-            # 2. [新增] 跨單號警告 (Orange Alert)
-            if is_mixed_orders:
-                mixed_warn_f = ttk.Frame(header_warning_f)
-                mixed_warn_f.pack(pady=5)
-                
-                ttk.Label(mixed_warn_f, 
-                          text="❗ 偵測到選中項目包含不同的進貨單號！", 
-                          foreground="#FF8C00", # 橘色
-                          font=("微軟正黑體", 10, "bold")).pack()
-                
-                # 顯示受影響的單號簡述，方便確認
-                ids_str = ", ".join(list(unique_order_ids)[:3]) # 只列前三筆
-                if len(unique_order_ids) > 3: 
-                    ids_str += "..."
-                ttk.Label(mixed_warn_f, 
-                          text=f"(涉及單號: {ids_str})", 
-                          foreground="#666", 
-                          font=("微軟正黑體", 9)).pack()
-
-            lbl_sub_warn = ttk.Label(header_warning_f, 
-                                     text="批量儲存後，所選項目的狀態與備註將被『完全覆蓋』。", 
-                                     foreground="#888", 
-                                     font=("微軟正黑體", 9))
-            lbl_sub_warn.pack(anchor="center", pady=(5,0))
-        else:
-            ttk.Label(header_warning_f, text=f"商品：{batch_list[0]['p_name']}", 
-                      font=("微軟正黑體", 11, "bold")).pack(anchor="w")
-
-        ttk.Separator(win, orient="horizontal").pack(fill="x", padx=10)
-
-        # --- [其餘介面部分 (數量、狀態、備註) 保持不變] ---
-        body = ttk.Frame(win, padding=20)
-        body.pack(fill="both", expand=True)
-
-        # 1. 數量與瑕疵 (僅單選)
-        var_actual_qty = tk.IntVar(value=batch_list[0]['qty'])
-        var_defects = tk.IntVar(value=0)
-        if not is_batch:
-            qty_f = ttk.LabelFrame(body, text="📦 數量與品質驗收", padding=10)
-            qty_f.pack(fill="x", pady=(0, 10))
-            ttk.Label(qty_f, text="實際收到數量:").pack(anchor="w")
-            ttk.Entry(qty_f, textvariable=var_actual_qty).pack(fill="x", pady=2)
-            ttk.Label(qty_f, text="瑕疵/損壞數量:").pack(anchor="w")
-            ttk.Entry(qty_f, textvariable=var_defects).pack(fill="x", pady=2)
-
-        # 2. 狀態與單號
-        logi_f = ttk.LabelFrame(body, text="🚚 物流狀態更新", padding=10)
-        logi_f.pack(fill="x", pady=10)
-        ttk.Label(logi_f, text="變更階段為:").pack(anchor="w")
-        var_status = tk.StringVar(value=batch_list[0]['status'])
-        status_cb = ttk.Combobox(logi_f, textvariable=var_status, state="readonly")
-        status_cb['values'] = ("待出貨", "廠商已發貨", "貨到集運倉", "集運倉已發貨", "抵達台灣海關", "國內配送中")
-        status_cb.pack(fill="x", pady=5)
-
-        ttk.Label(logi_f, text="物流單號:").pack(anchor="w", pady=(10,0))
-        var_logi_id = tk.StringVar(value=batch_list[0]['logi_id'])
-        ttk.Entry(logi_f, textvariable=var_logi_id).pack(fill="x", pady=5)
-
-        # 3. 備註 (P欄)
-        rem_f = ttk.LabelFrame(body, text="📝 備註事項 (P欄)", padding=10)
-        rem_f.pack(fill="x", pady=10)
-        var_custom_remark = tk.StringVar(value=batch_list[0]['remark'])
-        ttk.Entry(rem_f, textvariable=var_custom_remark).pack(fill="x", pady=5)
-
-        # --- [儲存邏輯 保持不變] ---
-        def perform_save():
-            try:
-                today_str = datetime.now().strftime("%Y-%m-%d")
-                with pd.ExcelFile(FILE_NAME) as xls:
-                    df_track = pd.read_excel(xls, sheet_name=SHEET_PUR_TRACKING)
-                    df_hist = pd.read_excel(xls, sheet_name=SHEET_PURCHASES)
-
-                # 清理文字欄位
-                text_cols = ['物流狀態', '物流追蹤', '備註', '進貨單號', '商品名稱', '時間_廠商出貨', 
-                             '時間_抵達集運倉', '時間_集運倉出貨', '時間_抵達台灣海關', '時間_國內配送中']
-                for df in [df_track, df_hist]:
-                    for col in text_cols:
-                        if col not in df.columns: 
-                            df[col] = ""
-                    df[text_cols] = df[text_cols].fillna("").astype(str).replace(['nan', 'NaN', 'None'], '')
-
-                for item in batch_list:
-                    t_idx = item['df_idx']
-                    df_track.at[t_idx, '物流狀態'] = var_status.get()
-                    if var_logi_id.get().strip():
-                        df_track.at[t_idx, '物流追蹤'] = f"'{var_logi_id.get().strip()}"
-                    df_track.at[t_idx, '備註'] = var_custom_remark.get().strip()
-
-                    if not is_batch:
-                        df_track.at[t_idx, '數量'] = var_actual_qty.get()
-                        df_track.at[t_idx, '瑕疵數量'] = var_defects.get()
-                        u_price = pd.to_numeric(df_track.at[t_idx, '進貨單價'], errors='coerce')
-                        df_track.at[t_idx, '進貨總額'] = var_actual_qty.get() * u_price
-
-                    time_map = {"廠商已發貨": "時間_廠商出貨", "貨到集運倉": "時間_抵達集運倉", 
-                                "集運倉已發貨": "時間_集運倉出貨", "抵達台灣海關": "時間_抵達台灣海關", "國內配送中": "時間_國內配送中"}
-                    col_name = time_map.get(var_status.get())
-                    if col_name: 
-                        df_track.at[t_idx, col_name] = today_str
-
-                    h_mask = (df_hist['進貨單號'].str.replace("'", "").str.strip() == item['pur_id']) & \
-                             (df_hist['商品名稱'].str.strip() == item['p_name'])
-                    if not df_hist[h_mask].empty:
-                        df_hist.loc[h_mask, '物流狀態'] = var_status.get()
-                        df_hist.loc[h_mask, '物流追蹤'] = df_track.at[t_idx, '物流追蹤']
-                        df_hist.loc[h_mask, '備註'] = var_custom_remark.get().strip()
-                        if col_name: 
-                            df_hist.loc[h_mask, col_name] = today_str
-
-                if self._universal_save({SHEET_PUR_TRACKING: df_track, SHEET_PURCHASES: df_hist}):
-                    messagebox.showinfo("成功", "物流資訊更新成功")
-                    self.load_purchase_tracking()
-                    win.destroy()
-            except Exception as e:
-                messagebox.showerror("錯誤", f"存檔失敗: {e}")
-
-        ttk.Button(body, text="🚀 執行更新並存檔", command=perform_save, style="Accent.TButton").pack(pady=20, fill="x")
+        """ 呼叫外部物流維護模組 """
+        # 傳入 self.root 作為父視窗，傳入 self 作為 app 實例
+        LogisticsWizard(self.root, self)
 
     @thread_safe_file
     def _get_full_order_info(self, df, order_id):
