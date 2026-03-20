@@ -415,12 +415,6 @@ class LoginWindow:
         else:
             messagebox.showerror("錯誤", "帳號或密碼無效！")
 
-
-
-
-
-
-
 class SalesApp:
     
     def __init__(self, root):
@@ -1452,8 +1446,6 @@ class SalesApp:
     def action_batch_distribute_shipping(self):
         """ 彈出視窗：輸入整筆單據的總運費/稅金，並依重量權重自動分攤 """
         ShippingDistributor(self.root, self)
-
-
 
 
     def setup_vendor_tab(self):
