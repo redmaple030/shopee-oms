@@ -1,4 +1,4 @@
-#shopee-oms 5.7 完整版
+#shopee-oms 5.8 完整版
 
 import json
 import sys
