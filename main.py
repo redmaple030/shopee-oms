@@ -2397,12 +2397,15 @@ class SalesApp:
 
 
     def run_pricing_calc(self):
-        """ 核心定價引擎：導入無條件進位 (Ceiling) 確保利潤空間 """
+        """ 
+        修正版定價引擎：採用『成本加成 (Markup)』邏輯
+        避免利潤百分比過高時導致的售價暴漲
+        """
         try:
-            from decimal import ROUND_CEILING # 確保匯入進位模式
+            from decimal import ROUND_CEILING
             
             cost = Decimal(str(self.var_calc_cost.get()))
-            profit_val = Decimal(str(self.var_calc_profit_val.get()))
+            profit_input = Decimal(str(self.var_calc_profit_val.get()))
             profit_type = self.var_calc_profit_type.get()
             
             fee_selection = self.var_calc_fee_rate.get()
@@ -2414,24 +2417,26 @@ class SalesApp:
                 fee_perc = Decimal(str(p))
                 fee_fixed = Decimal(str(f))
             
+            # 平台費率 (例如 14.5% -> 0.145)
             r_fee = fee_perc / Decimal("100")
             
-            if "百分比" in profit_type:
-                r_profit = profit_val / Decimal("100")
-                denominator = Decimal("1") - r_fee - r_profit
-                if denominator <= 0:
-                    self.var_calc_target_price.set("無法計算")
-                    return
-                target_price = (cost + fee_fixed) / denominator
-            else:
-                denominator = Decimal("1") - r_fee
-                if denominator <= 0:
-                    self.var_calc_target_price.set("錯誤")
-                    return
-                target_price = (cost + profit_val + fee_fixed) / denominator
+            # 安全分母 (防止平台費設為 100% 導致除以零)
+            denominator = Decimal("1") - r_fee
+            if denominator <= 0:
+                self.var_calc_target_price.set("費率異常")
+                return
 
-            # --- [關鍵修正：無條件進位到整數] ---
-            # .quantize(Decimal("1"), ...) 代表不保留小數點，且無條件進位
+            if "百分比" in profit_type:
+                # --- [修正點：成本加成邏輯] ---
+                # 利潤 = 成本 * 利潤率
+                # 售價 = (成本 + 利潤 + 固定費) / (1 - 平台費率)
+                target_price = (cost * (Decimal("1") + profit_input / Decimal("100")) + fee_fixed) / denominator
+            else:
+                # 固定金額利潤
+                # 售價 = (成本 + 固定利潤 + 固定費) / (1 - 平台費率)
+                target_price = (cost + profit_input + fee_fixed) / denominator
+
+            # 無條件進位至整數
             final_price = target_price.quantize(Decimal("1"), rounding=ROUND_CEILING)
             self.var_calc_target_price.set(f"{float(final_price):,.0f}")
 
