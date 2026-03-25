@@ -20,6 +20,7 @@ from LogisticsWizard import LogisticsWizard
 from ImportWizard import ImportWizard
 from ShippingWizard import show_shipping_dialog
 from ShippingDistributor import ShippingDistributor
+from OrderRecallHandler import RecallManager
 
 
 
@@ -566,6 +567,7 @@ class SalesApp:
 
         # --- [新增：還原緩衝區] ---
         self.undo_buffer = None  # 用來存放上一次「完整」的資料字典
+        self.FILE_NAME = FILE_NAME
 
       
     # 處理十進制運算
@@ -1404,6 +1406,7 @@ class SalesApp:
             traceback.print_exc()
             print(f"system: failed to load purchase tracking: {e}")
 
+
     def setup_pur_tracking_tab(self):
         """ 建立在途貨物追蹤：將狀態與單號拆分為獨立欄位 """
         frame = self.tab_pur_tracking
@@ -1416,6 +1419,9 @@ class SalesApp:
         cols_pur_track = ("進貨單號", "供應商", "商品名稱", "數量", "單價", "稅額", "運費", "物流狀態", "物流單號")
         
         self.tree_pur_track = ttk.Treeview(frame, columns=cols_pur_track, show='headings', height=15, selectmode="extended")
+
+        self.tree_pur_track.bind("<Double-1>", self.action_update_pur_logistics)
+
         
         # 設定欄位標題與寬度
         widths = {
@@ -1433,10 +1439,9 @@ class SalesApp:
         btn_ctrl.pack(fill="x")
         ttk.Button(btn_ctrl, text="✏️ 補充修改單項資訊", command=self.action_update_pur_logistics).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="⚖️ 整單運費稅金自動分攤", command=self.action_batch_distribute_shipping).pack(side="left", padx=5)
-        ttk.Button(btn_ctrl, text="✅ 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="📦 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="❌ 標記遺失/取消進貨", command=self.action_cancel_purchase).pack(side="left", padx=5)
-        ttk.Button(btn_ctrl, text="↩️ 還原上一步", command=self.action_perform_undo).pack(side="right", padx=10)
-
+        ttk.Button(btn_ctrl, text="↩️ 退回修改 (預填回採購單)",command=self.action_recall_purchase).pack(side="left", padx=5)
 
         
         self.load_purchase_tracking()
@@ -1446,6 +1451,14 @@ class SalesApp:
     def action_batch_distribute_shipping(self):
         """ 彈出視窗：輸入整筆單據的總運費/稅金，並依重量權重自動分攤 """
         ShippingDistributor(self.root, self)
+
+
+    @thread_safe_file
+    def action_recall_purchase(self):
+        """ 將在途貨物抓回採購單頁面 """
+        RecallManager.recall_purchase_order(self)
+
+
 
 
     def setup_vendor_tab(self):
@@ -1537,7 +1550,7 @@ class SalesApp:
         curr += 1
 
         # 標題
-        ttk.Label(left_f, text="📂 外部資料批次處理", font=("微軟正黑體", 10, "bold")).grid(row=curr, column=0, columnspan=2, sticky="w", padx=5)
+        ttk.Label(left_f, text="📚 外部資料批次處理", font=("微軟正黑體", 10, "bold")).grid(row=curr, column=0, columnspan=2, sticky="w", padx=5)
         curr += 1
 
         # 啟動精靈按鈕
@@ -2261,7 +2274,7 @@ class SalesApp:
 
     @thread_safe_file
     def generate_procurement_report(self):
-        """ 採購需求分析 V5.5：精確 ROP 模型，只顯示需要採購的商品 """
+        """ 採購需求分析 V5.5:精確 ROP 模型，只顯示需要採購的商品 """
         if not hasattr(self, 'tree_procure'):
             return
         for i in self.tree_procure.get_children():
@@ -3077,7 +3090,7 @@ class SalesApp:
         
         ttk.Separator(self.frame_left, orient="horizontal").pack(fill="x", pady=10)
         
-        ttk.Label(self.frame_left, text="📂 外部資料批次處理", font=("", 10, "bold")).pack(anchor="w")
+        ttk.Label(self.frame_left, text="📚 外部資料批次處理", font=("", 10, "bold")).pack(anchor="w")
         
         btn_wizard = ttk.Button(self.frame_left, text="📥 啟動商品批次匯入精靈", 
                                 command=self.open_import_wizard)
@@ -3210,7 +3223,7 @@ class SalesApp:
         ent_search.pack(side="left", padx=5)
         ent_search.bind("<KeyRelease>", lambda e: self.load_tracking_data())
 
-        ttk.Button(top_frame, text="🔄 重新整理", command=self.load_tracking_data).pack(side="right", pady=10)
+        ttk.Button(top_frame, text=" 🔄 重新整理", command=self.load_tracking_data).pack(side="right", pady=10)
 
 
         # 2. 中間：列表
@@ -3234,7 +3247,7 @@ class SalesApp:
         # 第一行：修改與刪除
         row1 = ttk.Frame(btn_main_frame)
         row1.pack(fill="x", pady=2)
-        ttk.Button(row1, text="↩️ 撤銷/還原上一步",command=self.action_perform_undo).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1, text="↩️ 退回修改 (預填回輸入頁)",command=self.action_recall_sales_order).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row1, text="➖ 刪除單一商品 (補位)", command=self.action_track_delete_item).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(row1, text="🗑️ 刪除整筆訂單", command=self.action_track_delete_order).pack(side="left", fill="x", expand=True, padx=2)
 
@@ -3246,6 +3259,13 @@ class SalesApp:
         ttk.Button(row2, text="✅ 完成訂單 (整筆結案)", command=self.action_track_complete_order).pack(side="left", fill="x", expand=True, padx=2)
 
         self.load_tracking_data()
+
+    @thread_safe_file
+    def action_recall_sales_order(self):
+        """ 呼叫外部還原模組：銷售訂單 """
+        RecallManager.recall_sales_order(self)
+
+
 
 
     @thread_safe_file
@@ -4882,7 +4902,7 @@ class SalesApp:
 
 
     @thread_safe_file
-    def action_update_pur_logistics(self):
+    def action_update_pur_logistics(self, event=None):
         """ 呼叫外部物流維護模組 """
         # 傳入 self.root 作為父視窗，傳入 self 作為 app 實例
         LogisticsWizard(self.root, self)
@@ -5104,7 +5124,7 @@ class SalesApp:
                 # 數據完整性保護：防止意外存入空表
                 if sheet_name in all_data and not all_data[sheet_name].empty:
                     if df is None or df.empty:
-                        print(f"⚠️ 攔截到分頁 [{sheet_name}] 的洗除嘗試。")
+                        print(f"[WARNING] Blocked empty save attempt for sheet: {sheet_name}")
                         continue 
                 all_data[sheet_name] = df
 
