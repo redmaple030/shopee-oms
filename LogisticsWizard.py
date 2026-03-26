@@ -19,7 +19,7 @@ class LogisticsWizard(tk.Toplevel):
             self.destroy()
             return
 
-        self.title("📦 物流維護")
+        self.title("🚛 物流維護")
         self.geometry("500x750")
         self.grab_set()
 

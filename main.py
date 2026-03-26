@@ -916,13 +916,13 @@ class SalesApp:
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
         # --- 左側：輸入資訊 ---
-        left_frame = ttk.LabelFrame(paned, text="1. 挑選商品 (按住 Ctrl/Shift 可多選)", padding=10)
+        left_frame = ttk.LabelFrame(paned, text="進貨單輸入", padding=10)
         paned.add(left_frame, weight=1)
 
         ttk.Label(left_frame, text="採購日期:").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_date).pack(fill="x", pady=2)
 
-        ttk.Label(left_frame, text="🔍 搜尋供應商:").pack(anchor="w", pady=(5,0))
+        ttk.Label(left_frame, text="📌搜尋供應商:", font=("微軟正黑體", current_size, "bold")).pack(anchor="w", pady=(5,0))
         self.ent_pur_v_search = ttk.Entry(left_frame, textvariable=self.var_pur_v_search)
         self.ent_pur_v_search.pack(fill="x", pady=2)
         self.ent_pur_v_search.bind('<KeyRelease>', lambda e: self.update_pur_supplier_list())
@@ -939,7 +939,7 @@ class SalesApp:
         ttk.Label(left_frame, text="目前選定廠商:").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_supplier, state="readonly", foreground="green").pack(fill="x", pady=2)
 
-        ttk.Label(left_frame, text="🔍 搜尋/過濾商品名稱:", font=("微軟正黑體", current_size, "bold")).pack(anchor="w", pady=(5,0))
+        ttk.Label(left_frame, text="📌 搜尋/過濾商品名稱: (按住 Ctrl/Shift 可多選)", font=("微軟正黑體", current_size, "bold")).pack(anchor="w", pady=(5,0))
         self.ent_pur_search = ttk.Entry(left_frame)
         self.ent_pur_search.pack(fill="x", pady=2)
         self.ent_pur_search.bind('<KeyRelease>', self.update_pur_prod_list_by_search)
@@ -986,7 +986,7 @@ class SalesApp:
         ttk.Button(btn_area, text="➖ 移除選中項目", command=self.remove_from_pur_cart).pack(side="left", padx=5)
         ttk.Button(btn_area, text="🔼 上移", command=self.move_pur_item_up).pack(side="left", padx=5)
         ttk.Button(btn_area, text="🔽 下移", command=self.move_pur_item_down).pack(side="left", padx=5)
-        ttk.Button(btn_area, text="🚀 送出整單採購", command=self.submit_purchase_batch).pack(side="right", padx=5)
+        ttk.Button(btn_area, text="📃 送出整單採購", command=self.submit_purchase_batch).pack(side="right", padx=5)
 
         self.update_pur_supplier_list()
         self.update_pur_prod_list()
@@ -1437,11 +1437,15 @@ class SalesApp:
         # 按鈕區
         btn_ctrl = ttk.Frame(frame, padding=10)
         btn_ctrl.pack(fill="x")
-        ttk.Button(btn_ctrl, text="✏️ 補充修改單項資訊", command=self.action_update_pur_logistics).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="✒️ 補充修改單項資訊", command=self.action_update_pur_logistics).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="⚖️ 整單運費稅金自動分攤", command=self.action_batch_distribute_shipping).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="📤 退回採購單 (預填回採購單)",command=self.action_recall_purchase).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="↩️ 撤銷/還原上一步",command=self.action_perform_undo).pack(side="left", padx=5)
+        ttk.Button(btn_ctrl, text="🔖 標記遺失/取消進貨", command=self.action_cancel_purchase).pack(side="left", padx=5)
         ttk.Button(btn_ctrl, text="📦 確認收貨入庫", command=self.action_confirm_inbound).pack(side="left", padx=5)
-        ttk.Button(btn_ctrl, text="❌ 標記遺失/取消進貨", command=self.action_cancel_purchase).pack(side="left", padx=5)
-        ttk.Button(btn_ctrl, text="↩️ 退回修改 (預填回採購單)",command=self.action_recall_purchase).pack(side="left", padx=5)
+
+
+
 
         
         self.load_purchase_tracking()
@@ -1550,7 +1554,7 @@ class SalesApp:
         curr += 1
 
         # 標題
-        ttk.Label(left_f, text="📚 外部資料批次處理", font=("微軟正黑體", 10, "bold")).grid(row=curr, column=0, columnspan=2, sticky="w", padx=5)
+        ttk.Label(left_f, text="📂 外部資料批次處理", font=("微軟正黑體", 10, "bold")).grid(row=curr, column=0, columnspan=2, sticky="w", padx=5)
         curr += 1
 
         # 啟動精靈按鈕
@@ -1562,7 +1566,7 @@ class SalesApp:
         ttk.Label(left_f, text="* 支援舊檔 Excel 欄位匹配匯入", foreground="gray", font=("微軟正黑體", 9)).grid(row=curr, column=0, columnspan=2, sticky="w", padx=5)
 
         # --- 右側清單 ---
-        right_f = ttk.LabelFrame(paned, text="🔍 廠商清單", padding=15)
+        right_f = ttk.LabelFrame(paned, text="📌 廠商清單", padding=15)
         paned.add(right_f, weight=1)
 
         ent_search = ttk.Entry(right_f, textvariable=self.var_v_search)
@@ -2810,7 +2814,7 @@ class SalesApp:
         ttk.Label(detail_frame, text="成本:").grid(row=4, column=0, **grid_opts)
         ttk.Entry(detail_frame, textvariable=self.var_sel_cost).grid(row=4, column=1, sticky="ew")
 
-        ttk.Button(detail_frame, text="加入清單 ->", command=self.add_to_cart).grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
+        ttk.Button(detail_frame, text="加入清單 ➡️", command=self.add_to_cart).grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
 
         right_frame = ttk.LabelFrame(paned, text="訂單內容", padding=10)
         paned.add(right_frame, weight=2)
@@ -2835,7 +2839,7 @@ class SalesApp:
 
         ttk.Button(sales_btn_f, text="🔼 排序上移", command=self.move_sales_item_up).pack(side="left", padx=2)
         ttk.Button(sales_btn_f, text="🔽 排序下移", command=self.move_sales_item_down).pack(side="left", padx=2)
-        ttk.Button(sales_btn_f, text="(x) 移除", command=self.remove_from_cart).pack(side="right", padx=10)
+        ttk.Button(sales_btn_f, text="✖️ 移除", command=self.remove_from_cart).pack(side="right", padx=10)
 
         fee_frame = ttk.LabelFrame(right_frame, text="費用與折扣", padding=10)
         fee_frame.pack(fill="x", pady=5)
@@ -3026,7 +3030,7 @@ class SalesApp:
         self.listbox_mgmt.pack(fill="both", expand=True, pady=5)
         self.listbox_mgmt.bind('<<ListboxSelect>>', self.on_mgmt_prod_select)
 
-        self.edit_frame = ttk.LabelFrame(self.frame_right, text="✏️ 快速編輯資料", padding=10)
+        self.edit_frame = ttk.LabelFrame(self.frame_right, text="✒️ 快速編輯資料", padding=10)
         self.edit_frame.pack(fill="x")
         
         self.render_edit_area() # 渲染右側編輯區
@@ -3084,13 +3088,13 @@ class SalesApp:
         btn_add_f = ttk.Frame(self.frame_left)
         btn_add_f.pack(fill="x", pady=15)
 
-        ttk.Button(btn_add_f, text="✅ 完成建檔", command=self.submit_new_product).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(btn_add_f, text="💾 完成建檔", command=self.submit_new_product).pack(side="left", fill="x", expand=True, padx=(0, 2))
         # 增加還原按鈕
         ttk.Button(btn_add_f, text="↩️ 還原上一步", command=self.action_perform_undo).pack(side="left", padx=(2, 0))
         
         ttk.Separator(self.frame_left, orient="horizontal").pack(fill="x", pady=10)
         
-        ttk.Label(self.frame_left, text="📚 外部資料批次處理", font=("", 10, "bold")).pack(anchor="w")
+        ttk.Label(self.frame_left, text="📂 外部資料批次處理", font=("", 10, "bold")).pack(anchor="w")
         
         btn_wizard = ttk.Button(self.frame_left, text="📥 啟動商品批次匯入精靈", 
                                 command=self.open_import_wizard)
@@ -3247,16 +3251,17 @@ class SalesApp:
         # 第一行：修改與刪除
         row1 = ttk.Frame(btn_main_frame)
         row1.pack(fill="x", pady=2)
-        ttk.Button(row1, text="↩️ 退回修改 (預填回輸入頁)",command=self.action_recall_sales_order).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(row1, text="➖ 刪除單一商品 (補位)", command=self.action_track_delete_item).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(row1, text="🗑️ 刪除整筆訂單", command=self.action_track_delete_order).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1, text="📤 退回商品輸入 (預填回輸入頁)",command=self.action_recall_sales_order).pack(side="left",padx=5)
+        ttk.Button(row1, text="↩️ 撤銷/還原上一步",command=self.action_perform_undo).pack(side="left", padx=5)
+        ttk.Button(row1, text="🚛 退貨單一商品", command=self.action_track_return_item).pack(side="left", padx=5)
+        ttk.Button(row1, text="🚚 退貨整筆訂單", command=self.action_track_return_order).pack(side="left", padx=5)
+        ttk.Button(row1, text="📇 刪除單一商品 (補位)", command=self.action_track_delete_item).pack(side="left",padx=5)
+        ttk.Button(row1, text="🗑️ 刪除整筆訂單", command=self.action_track_delete_order).pack(side="left", padx=5)
+        ttk.Button(row1, text="✅ 完成訂單 (整筆結案)", command=self.action_track_complete_order).pack(side="left", padx=5)
 
         # 第二行：結案與退貨
         row2 = ttk.Frame(btn_main_frame)
-        row2.pack(fill="x", pady=2)
-        ttk.Button(row2, text="⬅️ 退貨單一商品", command=self.action_track_return_item).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(row2, text="⏪ 退貨整筆訂單", command=self.action_track_return_order).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(row2, text="✅ 完成訂單 (整筆結案)", command=self.action_track_complete_order).pack(side="left", fill="x", expand=True, padx=2)
+        row2.pack(fill="x", pady=4)
 
         self.load_tracking_data()
 
