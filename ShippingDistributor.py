@@ -99,6 +99,15 @@ class ShippingDistributor(tk.Toplevel):
                 df_hist = pd.read_excel(xls, sheet_name=self.SHEET_HIST)
                 df_prods = pd.read_excel(xls, sheet_name=self.SHEET_PROD)
 
+             # --- [核心修正：解決型別衝突] ---
+            # 強制將運費與稅金欄位轉為 float 型態，確保能存入小數點
+            target_cols = ['分攤運費', '海關稅金']
+            for df in [df_track, df_hist]:
+                for col in target_cols:
+                    if col in df.columns:
+                        # 先轉為 numeric (處理空值)，再強制轉為 float
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
+
             # 確保權重欄位存在
             df_prods['單位權重'] = pd.to_numeric(df_prods.get('單位權重', 1.0), errors='coerce').fillna(1.0)
             weight_map = df_prods.set_index('商品名稱')['單位權重'].to_dict()

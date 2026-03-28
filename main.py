@@ -1,4 +1,4 @@
-#shopee-oms 5.8 完整版
+#shopee-oms 6.0 完整版
 
 import json
 import sys
@@ -482,6 +482,7 @@ class SalesApp:
         self.var_pur_v_search = tk.StringVar()  # 進貨頁面的廠商搜尋框
         self.var_pur_supplier = tk.StringVar()  # 進貨頁面的目前選定廠商
 
+
         #--- [新增：廠商評估 KPI 參數變數] ---
         # 權重類 (加總應為 1.0)
         self.var_enable_vendor_kpi = tk.BooleanVar(value=True) # 預設開啟
@@ -918,6 +919,7 @@ class SalesApp:
         # --- 左側：輸入資訊 ---
         left_frame = ttk.LabelFrame(paned, text="進貨單輸入", padding=10)
         paned.add(left_frame, weight=1)
+
 
         ttk.Label(left_frame, text="採購日期:").pack(anchor="w")
         ttk.Entry(left_frame, textvariable=self.var_pur_date).pack(fill="x", pady=2)
