@@ -555,6 +555,11 @@ class SalesApp:
         self.var_upd_stock = tk.IntVar(value=0)
         self.var_upd_time = tk.StringVar(value="尚無資料")
 
+        self.var_add_price = tk.DoubleVar(value=0.0)
+        self.var_upd_price = tk.DoubleVar(value=0.0)
+
+
+
         self.check_excel_file()
         self.products_df = self.load_products()
         self.is_vip = False # 預設不是 VIP
@@ -738,7 +743,7 @@ class SalesApp:
             SHEET_VENDORS: ["廠商名稱", "通路", "統編", "聯絡人", "電話", "地址", "備註", 
                             "平均前置天數", "總到貨率", "總合格率", "綜合評等分數", "星等", "最後更新"],
 
-            SHEET_PRODUCTS: ["商品編號", "分類Tag", "商品名稱", "預設成本", "目前庫存", 
+            SHEET_PRODUCTS: ["商品編號", "分類Tag", "商品名稱", "預設成本", "預設售價", "目前庫存", 
                              "最後更新時間", "初始上架時間", "最後進貨時間", "安全庫存", 
                              "商品連結", "商品備註", "單位權重"],
 
@@ -3138,9 +3143,16 @@ class SalesApp:
         # 庫存與成本 (必選)
         ttk.Label(self.edit_frame, text="庫存:").grid(row=curr_row, column=0, **e_opts)
         ttk.Entry(self.edit_frame, textvariable=self.var_upd_stock).grid(row=curr_row, column=1, sticky="ew")
-        ttk.Label(self.edit_frame, text="成本:").grid(row=curr_row, column=2, **e_opts)
-        ttk.Entry(self.edit_frame, textvariable=self.var_upd_cost).grid(row=curr_row, column=3, sticky="ew")
+
         curr_row += 1
+
+        ttk.Label(self.edit_frame, text="成本:").grid(row=curr_row, column=0, **e_opts)
+        ttk.Entry(self.edit_frame, textvariable=self.var_upd_cost).grid(row=curr_row, column=1, sticky="ew")
+
+        ttk.Label(self.edit_frame, text="售價:").grid(row=curr_row, column=2, **e_opts)
+        ttk.Entry(self.edit_frame, textvariable=self.var_upd_price).grid(row=curr_row, column=3, sticky="ew")
+        curr_row += 1
+
 
         if self.show_fields["安全庫存"].get():
             ttk.Label(self.edit_frame, text="安全量:").grid(row=curr_row, column=0, **e_opts)
@@ -5311,12 +5323,19 @@ class SalesApp:
                     display_str = f"[{row['分類Tag']}] {row['商品名稱']} (庫存: {row['目前庫存']})"
                     self.listbox_sales.insert(tk.END, display_str)
 
-    def on_sales_prod_select(self, event):
+    def on_sales_prod_select(self, event=None): # 使用 event=None 增加相容性
+        """ 銷售頁面：選取商品後自動帶入售價、成本與 SKU """
         selection = self.listbox_sales.curselection()
-        if selection:
+        if not selection:
+            return
+
+        try:
+            # 1. 解析選中的顯示文字
             display_str = self.listbox_sales.get(selection[0])
+            
             # 解析名稱：拿最後一個 "]" 之後的文字，並切掉後面的 "(庫存:..."
             try:
+                # 假設格式是 "[Tag] 商品名稱 (庫存: X)"
                 temp = display_str.rsplit(" (庫存:", 1)[0]
                 selected_name = temp.split("]")[-1].strip() if "]" in temp else temp
             except Exception:
@@ -5325,26 +5344,40 @@ class SalesApp:
             self.var_sel_name.set(selected_name)
             self.var_sel_qty.set(1)
             
-            # 從資料庫抓取該商品的詳細資料
-            record = self.products_df[self.products_df['商品名稱'] == selected_name]
+            # 2. 從商品資料庫（DataFrame）檢索詳細資訊
+            # 使用 .strip() 確保比對時不會被空格干擾
+            record = self.products_df[self.products_df['商品名稱'].astype(str).str.strip() == selected_name]
+            
             if not record.empty:
-                # --- 讀取編號並處理空值 ---
-                raw_sku = record.iloc[0].get('商品編號', '')
+                row = record.iloc[0]
+                
+                # --- A. 處理商品編號 (SKU) ---
+                raw_sku = row.get('商品編號', '')
                 sku = str(raw_sku) if pd.notna(raw_sku) else ""
                 if sku.lower() == "nan": 
-                    sku = "" # 移除 pandas 的 nan 噪音
-                
-                # 這裡就是剛才報錯的地方，現在 self.var_sel_sku 已經在 __init__ 定義好了
+                    sku = ""
                 self.var_sel_sku.set(sku) 
                 
-                self.var_sel_cost.set(record.iloc[0]['預設成本'])
+                # --- B. 處理預設成本 ---
+                # 修正原本的語法錯誤
+                cost_val = row.get('預設成本', 0.0)
+                self.var_sel_cost.set(float(cost_val) if pd.notna(cost_val) else 0.0)
+
+                # --- C. 處理預設售價 ---
+                default_price = row.get('預設售價', 0.0)
+                if pd.isna(default_price) or str(default_price).lower() == 'nan': 
+                    default_price = 0.0
+                self.var_sel_price.set(float(default_price))
+
+                # --- D. 處理庫存顯示 ---
                 try: 
-                    stock = int(record.iloc[0]['目前庫存'])
+                    stock = row.get('目前庫存', 0)
+                    self.var_sel_stock_info.set(str(int(stock))) 
                 except Exception: 
-                    stock = 0
-                self.var_sel_stock_info.set(str(stock)) 
-                self.var_sel_price.set(0) # 清空上次售價
-    
+                    self.var_sel_stock_info.set("0")
+
+        except Exception as e:
+            print(f"Error in on_sales_prod_select: {e}")
 
     def add_to_cart(self):
         name = self.var_sel_name.get()
@@ -5665,12 +5698,13 @@ class SalesApp:
                 self.var_upd_tag.set(clean_val(row.get('分類Tag', '')))
                 self.var_upd_url.set(clean_val(row.get('商品連結', '')))
                 self.var_upd_remarks.set(clean_val(row.get('商品備註', '')))
-                
+
                 # 5. 填入數值類欄位 (加入 is_num=True 確保 NaN 會變回 0)
                 self.var_upd_safety.set(int(clean_val(row.get('安全庫存', 0), is_num=True)))
                 self.var_upd_stock.set(int(clean_val(row.get('目前庫存', 0), is_num=True)))
                 self.var_upd_cost.set(float(clean_val(row.get('預設成本', 0.0), is_num=True)))
-                
+                self.var_upd_price.set(float(row.get('預設售價', 0.0)))
+
                 # 6. 填入單位權重 (特別處理)
                 if hasattr(self, 'var_upd_weight'):
                     weight_val = row.get('單位權重', 1.0)
@@ -5720,6 +5754,7 @@ class SalesApp:
                 "分類Tag": self.var_add_tag.get().strip() if self.var_add_tag.get() else "未分類",
                 "商品名稱": name,
                 "預設成本": 0.0,
+                "售價": self.var_add_price.get(),
                 "目前庫存": 0,
                 "最後更新時間": now_str,
                 "初始上架時間": now_str,
@@ -5728,6 +5763,7 @@ class SalesApp:
                 "商品連結": url if url else "無",
                 "商品備註": remarks if remarks else "無",
                 "單位權重": self.var_add_weight.get()
+
             }
             
             # 合併資料並排序
@@ -5814,6 +5850,7 @@ class SalesApp:
                 df_prods.loc[idx, '分類Tag'] = self.var_upd_tag.get()
                 df_prods.loc[idx, '商品名稱'] = self.var_upd_name.get()
                 df_prods.loc[idx, '預設成本'] = new_cost
+                df_prods.loc[idx, '預設售價'] = float(self.var_upd_price.get())
                 df_prods.loc[idx, '目前庫存'] = new_stock
                 df_prods.loc[idx, '安全庫存'] = new_safety
                 df_prods.loc[idx, '商品連結'] = self.var_upd_url.get()

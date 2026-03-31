@@ -24,19 +24,18 @@ def resource_path(relative_path):
 class ImportWizard(tk.Toplevel):
     def __init__(self, parent, save_callback):
         super().__init__(parent)
-        self.title("商品資料批次匯入精靈(excel表格版)")
+        self.title("商品資料批次匯入精靈 (Excel 售價支援版)")
         self.geometry("1200x850")
         self.save_callback = save_callback 
         self.import_raw_df = pd.DataFrame()
 
         try:
-            self.iconbitmap(resource_path("main.ico"))
+            # 嘗試讀取圖標
+            self.iconbitmap(resource_path("favicon.ico"))
         except Exception:
             pass
 
-        
-        
-        # ERP 核心必填欄位
+        # ERP 核心必填欄位 (維持名稱、庫存、成本)
         self.REQUIRED_FIELDS = ["商品名稱", "目前庫存", "預設成本"]
         
         self.grab_set()
@@ -55,8 +54,8 @@ class ImportWizard(tk.Toplevel):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill="both", expand=True, padx=20)
 
-        # --- 左側：回歸本來的表格 UI ---
-        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽--請將要匯入的資料放在excel第一個分頁", padding=5)
+        # --- 左側：原始資料預覽 ---
+        left_f = ttk.LabelFrame(paned, text="Step 2: 原始資料預覽 (請確保數據在第一個分頁)", padding=5)
         paned.add(left_f, weight=3)
         
         if Sheet:
@@ -64,7 +63,6 @@ class ImportWizard(tk.Toplevel):
             self.sheet.pack(fill="both", expand=True)
             self.sheet.enable_bindings()
         else:
-            # 備援方案：若使用者未安裝 tksheet，才顯示文字
             self.sheet = tk.Text(left_f, wrap="none")
             self.sheet.pack(fill="both", expand=True)
             ttk.Label(left_f, text="建議安裝 tksheet 以獲得最佳表格體驗", foreground="red").pack()
@@ -73,14 +71,16 @@ class ImportWizard(tk.Toplevel):
         right_f = ttk.LabelFrame(paned, text="Step 3: ERP 欄位匹配設定", padding=10)
         paned.add(right_f, weight=1)
 
+        # 加入了「預設售價」欄位
         self.field_keys = [
             "商品名稱", "商品編號", "分類Tag", "單位權重", 
-            "目前庫存", "預設成本", "安全庫存", 
-            "初始上架時間", "最後進貨時間", "商品連結", "商品備註"
+            "目前庫存", "預設成本", "預設售價", # <--- 新增
+            "安全庫存", "初始上架時間", "最後進貨時間", 
+            "商品連結", "商品備註"
         ]
         self.vars = {k: tk.StringVar(value="(不匯入 / 留空)") for k in self.field_keys}
 
-        # 映射清單加入滾輪，防止欄位過多塞不下
+        # 映射清單加入滾輪
         container = ttk.Frame(right_f)
         container.pack(fill="both", expand=True)
 
@@ -98,7 +98,6 @@ class ImportWizard(tk.Toplevel):
             prefix = "⭐ " if label in self.REQUIRED_FIELDS else "  "
             ttk.Label(f, text=f"{prefix}{label}:", width=13).pack(side="left")
             
-            # 每一個對應欄位
             cb = ttk.Combobox(f, textvariable=self.vars[label], state="readonly")
             cb.pack(side="left", fill="x", expand=True)
             setattr(self, f"cb_{label}", cb)
@@ -119,27 +118,22 @@ class ImportWizard(tk.Toplevel):
         if not path: 
             return
         try:
-            self.lbl_path.config(text=f"已載入: {path.split('/')[-1]}", foreground="green")
+            self.lbl_path.config(text=f"已載入: {os.path.basename(path)}", foreground="green")
             self.import_raw_df = pd.read_excel(path).fillna("")
             headers = self.import_raw_df.columns.tolist()
             
-            # 更新 Step 2 的表格資料
             if Sheet and isinstance(self.sheet, Sheet):
                 self.sheet.set_sheet_data(self.import_raw_df.values.tolist())
                 self.sheet.headers(headers)
-            else:
-                self.sheet.delete("1.0", tk.END)
-                self.sheet.insert(tk.END, self.import_raw_df.to_string())
 
-            # 更新 Step 3 的選單選項
             options = ["(不匯入 / 留空)"] + [f"列 {i}: {h}" for i, h in enumerate(headers)]
             
             for label in self.field_keys:
                 cb = getattr(self, f"cb_{label}")
                 cb['values'] = options
-                cb.set("(不匯入 / 留空)") # 預設重設，防止舊緩存
+                cb.set("(不匯入 / 留空)")
 
-                # --- 智慧自動匹配邏輯 ---
+                # --- 智慧自動匹配邏輯優化 ---
                 for opt in options:
                     h_low = opt.lower()
                     if label in opt: 
@@ -152,6 +146,9 @@ class ImportWizard(tk.Toplevel):
                         cb.set(opt)
                         break
                     if label == "分類Tag" and ("分類" in h_low or "標籤" in h_low or "tag" in h_low):
+                        cb.set(opt)
+                        break
+                    if label == "預設售價" and ("售價" in h_low or "價格" in h_low or "price" in h_low):
                         cb.set(opt)
                         break
 
@@ -173,7 +170,7 @@ class ImportWizard(tk.Toplevel):
         # 2. 核心欄位檢查
         missing = [f for f in self.REQUIRED_FIELDS if f not in mapping]
         if missing:
-            messagebox.showerror("映射不全", f"您漏掉了 ERP 核心必填欄位：\n{', '.join(missing)}")
+            messagebox.showerror("映射不全", f"您漏掉了核心必填欄位：\n{', '.join(missing)}")
             return
 
         # 3. 逐行資料清洗與轉換
@@ -206,6 +203,7 @@ class ImportWizard(tk.Toplevel):
                     "分類Tag": get_val("分類Tag", "未分類"),
                     "商品名稱": p_name,
                     "預設成本": get_num("預設成本", 0.0, True),
+                    "預設售價": get_num("預設售價", 0.0, True), # <--- 新增
                     "目前庫存": get_num("目前庫存", 0),
                     "最後更新時間": now_str,
                     "初始上架時間": get_val("初始上架時間", now_str),
@@ -216,8 +214,7 @@ class ImportWizard(tk.Toplevel):
                     "單位權重": get_num("單位權重", 1.0, True)
                 }
                 new_list.append(item)
-            except Exception :
-                messagebox.showerror("錯誤", "資料處理過程中發生錯誤。")
+            except Exception:
                 continue
 
         if not new_list:
@@ -229,5 +226,3 @@ class ImportWizard(tk.Toplevel):
             if self.save_callback(new_list):
                 messagebox.showinfo("成功", "商品資料庫已完成增量更新。")
                 self.destroy()
-                
-
