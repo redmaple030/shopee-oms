@@ -5519,14 +5519,15 @@ class SalesApp:
     
     @thread_safe_file
     def submit_order(self):
-        """ 修正版：使用 Decimal 高精度分攤手續費並存入追蹤區 """
+        """ 修正版：送出訂單時同步更新庫存與商品資料中的『預設售價』 """
         if not self.cart_data: 
             return
         
+        # 1. 買家資訊檢查
         if self.var_enable_cust.get():
             cust_name = self.var_cust_name.get().strip()
             if not cust_name:
-                messagebox.showerror("欄位缺失", "請務必輸入『買家名稱』！")
+                messagebox.showerror("欄位缺失", "您已勾選『填寫來源與顧客』，請務必輸入『買家名稱』！")
                 self.entry_cust_name.focus() 
                 return
             cust_loc = self.var_cust_loc.get().strip()
@@ -5539,8 +5540,7 @@ class SalesApp:
         date_str = self.var_date.get().strip()
         order_id = datetime.now().strftime("%Y%m%d%H%M%S") 
 
-        # --- [獲取 Decimal 精度總額] ---
-        # 確保您的 update_totals() 現在回傳的是 (Decimal, Decimal, Decimal)
+        # 2. 獲取 Decimal 精度總額
         t_sales, t_fee, t_tax = self.update_totals() 
         
         fee_tag = self.var_fee_tag.get()
@@ -5553,28 +5553,26 @@ class SalesApp:
 
         try:
             rows = []
+            # 讀取目前商品資料 (準備更新庫存與售價)
             df_prods_current = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
+            now_full = datetime.now().strftime("%Y-%m-%d %H:%M")
 
             for i, item in enumerate(self.cart_data):
-                # 表頭資訊僅填於第一列
                 is_first = (i == 0)
                 
                 # --- [Decimal 分攤計算] ---
                 d_item_sales = Decimal(str(item['total_sales']))
                 d_item_cost = Decimal(str(item['total_cost']))
                 
-                # 按銷售佔比分攤手續費與稅額
                 ratio = d_item_sales / t_sales if t_sales > 0 else Decimal("0")
                 alloc_fee = self.dec_round(t_fee * ratio)
                 alloc_tax = self.dec_round(t_tax * ratio)
-                
-                # 淨利計算 (每一筆都必須精確)
-                # 注意：折扣(d_extra)通常在總帳扣除，這裡分攤到每一項
                 alloc_extra = self.dec_round(d_extra * ratio)
-                net = d_item_sales - d_item_cost - alloc_fee - alloc_tax - alloc_extra
                 
+                net = d_item_sales - d_item_cost - alloc_fee - alloc_tax - alloc_extra
                 margin_pct = (net / d_item_sales * 100) if d_item_sales > 0 else Decimal("0")
 
+                # 準備存入銷售紀錄的資料
                 rows.append({
                     "訂單編號": order_id,
                     "商品編號": item.get('sku', ''),
@@ -5590,20 +5588,30 @@ class SalesApp:
                     "總銷售額": float(d_item_sales),
                     "總成本": float(d_item_cost),
                     "分攤手續費": float(alloc_fee),
-                    "扣費項目": final_fee_tag if is_first else "", # 使用清洗後的標籤
+                    "扣費項目": final_fee_tag if is_first else "", 
                     "總淨利": float(self.dec_round(net)),
                     "毛利率": float(self.dec_round(margin_pct, 1)),
                     "稅額": float(alloc_tax)
                 })
 
-                # 扣庫存邏輯
+                # --- [核心修正：更新庫存與預設售價] ---
                 p_name = item['name']
+                sell_price = float(item['unit_price']) # 取得本次輸入的售價
+                
                 idxs = df_prods_current[df_prods_current['商品名稱'] == p_name].index
                 if not idxs.empty:
-                    df_prods_current.at[idxs[0], '目前庫存'] -= int(item['qty'])
+                    target_idx = idxs[0]
+                    
+                    # 1. 扣除庫存
+                    df_prods_current.at[target_idx, '目前庫存'] -= int(item['qty'])
+                    
+                    # 2. 更新預設售價：只要本次售價 > 0，就同步回主檔
+                    if sell_price > 0:
+                        df_prods_current.at[target_idx, '預設售價'] = sell_price
+                        # 同步更新最後修改時間，展現維護嚴謹度
+                        df_prods_current.at[target_idx, '最後更新時間'] = now_full
 
-
-            # 讀取並合併追蹤表
+            # 3. 讀取並合併追蹤表
             try: 
                 df_track_existing = pd.read_excel(FILE_NAME, sheet_name=SHEET_TRACKING)
             except Exception:
@@ -5613,36 +5621,36 @@ class SalesApp:
             df_new_batch['訂單編號'] = df_new_batch['訂單編號'].apply(lambda x: f"'{x}")
             df_track_combined = pd.concat([df_track_existing, df_new_batch], ignore_index=True)
 
-            # 存檔
+            # 4. 使用萬用引擎存檔 (一次更新商品主檔與追蹤表)
             if self._universal_save({
                 SHEET_PRODUCTS: df_prods_current, 
                 SHEET_TRACKING: df_track_combined
             }):
+                # 更新本地記憶體數據
                 self.products_df = df_prods_current
                 self.update_sales_prod_list()
                 self.load_tracking_data() 
-                messagebox.showinfo("成功", f"訂單 {order_id} 已送出。")
+                
+                messagebox.showinfo("成功", f"訂單 {order_id} 已送出，商品預設售價已同步更新。")
 
-                # 重置 UI
+                # 5. 重置 UI (歸零與清空)
                 self.cart_data = []
                 for i in self.tree.get_children(): 
                     self.tree.delete(i)
                 
-                # 重置顧客與費用欄位
                 self.var_cust_name.set("")
                 self.var_ship_fee.set(0.0)
                 self.var_extra_fee.set(0.0)
                 self.var_fee_tag.set("")
                 self.var_sel_stock_info.set("--")
                 
-                # 重置平台費率下拉選單狀態 (回到唯讀)
-                self.combo_fee_rate.config(state="readonly")
-                
-                # 重新觸發計算 (會變回全 0)
+                # 費率維持使用者選取的狀態 (Sticky Selection 優化)
                 self.update_totals()
 
         except Exception as e: 
-            messagebox.showerror("錯誤", f"存檔失敗: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("錯誤", f"提交失敗: {str(e)}")
 
 
     def update_mgmt_prod_list(self):
@@ -5748,13 +5756,18 @@ class SalesApp:
             url = self.var_add_url.get().strip()
             remarks = self.var_add_remarks.get().strip()
 
+            try:
+                price_val = float(self.var_add_price.get())
+            except (tk.TclError, ValueError):
+                price_val = 0.0
+
             # 準備新資料列
             new_row = {
                 "商品編號": self.var_add_sku.get().strip().upper(),
                 "分類Tag": self.var_add_tag.get().strip() if self.var_add_tag.get() else "未分類",
                 "商品名稱": name,
                 "預設成本": 0.0,
-                "售價": self.var_add_price.get(),
+                "售價": price_val,
                 "目前庫存": 0,
                 "最後更新時間": now_str,
                 "初始上架時間": now_str,

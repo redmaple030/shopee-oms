@@ -192,6 +192,7 @@ class ImportWizard(tk.Toplevel):
                 def get_num(key, default, is_float=False):
                     if key in mapping:
                         raw_v = row.iloc[mapping[key]]
+                        # pd.to_numeric 會處理空值並轉為 NaN，隨後用 .fillna(default) 補位
                         val = pd.to_numeric(raw_v, errors='coerce')
                         if pd.isna(val): 
                             return default
