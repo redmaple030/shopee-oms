@@ -21,6 +21,8 @@ from ImportWizard import ImportWizard
 from ShippingWizard import show_shipping_dialog
 from ShippingDistributor import ShippingDistributor
 from OrderRecallHandler import RecallManager
+from ProcurementManager import ProcurementManager
+
 
 
 
@@ -420,6 +422,20 @@ class SalesApp:
     
     def __init__(self, root):
         self.root = root
+
+        self.FILE_NAME = FILE_NAME
+        self.SHEET_PRODUCTS = SHEET_PRODUCTS
+        self.SHEET_SALES = SHEET_SALES
+        self.SHEET_TRACKING = SHEET_TRACKING
+        self.SHEET_PURCHASES = SHEET_PURCHASES
+        self.SHEET_PUR_TRACKING = SHEET_PUR_TRACKING
+        self.SHEET_VENDORS = SHEET_VENDORS
+        self.SHEET_RETURNS = SHEET_RETURNS
+        self.SHEET_CONFIG = SHEET_FEES  
+        self.SHEET_SYS_SETTINGS = SHEET_SYS_SETTINGS
+
+
+
         self.root.title("蝦皮/網拍進銷存系統 (正式版)")
         self.root.geometry("1280x900") 
         self.var_shop_name = tk.StringVar(value="商店名稱") # 預設名稱
@@ -573,7 +589,7 @@ class SalesApp:
 
         # --- [新增：還原緩衝區] ---
         self.undo_buffer = None  # 用來存放上一次「完整」的資料字典
-        self.FILE_NAME = FILE_NAME
+     
 
       
     # 處理十進制運算
@@ -2224,6 +2240,9 @@ class SalesApp:
         
         self.tree_procure.pack(fill="both", expand=True)
 
+        self.tree_procure.bind("<Double-1>", lambda e: ProcurementManager.open_stock_correction(self))
+
+
         # ================= [右側：定價估算器] =================
         right_main_f = ttk.LabelFrame(self.procure_paned, text="💰 商品上架價格估算器", padding=15)
         self.procure_paned.add(right_main_f, weight=1)
@@ -2285,100 +2304,8 @@ class SalesApp:
 
     @thread_safe_file
     def generate_procurement_report(self):
-        """ 採購需求分析 V5.5:精確 ROP 模型，只顯示需要採購的商品 """
-        if not hasattr(self, 'tree_procure'):
-            return
-        for i in self.tree_procure.get_children():
-            self.tree_procure.delete(i)
-        
-        try:
-            if not os.path.exists(FILE_NAME):
-                return
-            with pd.ExcelFile(FILE_NAME) as xls:
-                df_sales = pd.read_excel(xls, sheet_name=SHEET_SALES)
-                df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
-            
-            if df_prods.empty:
-                return
+        ProcurementManager.generate_report(self)
 
-            # 資料清洗與型別轉換
-            for col in ['目前庫存', '安全庫存']:
-                df_prods[col] = pd.to_numeric(df_prods[col], errors='coerce').fillna(0)
-            df_sales['數量'] = pd.to_numeric(df_sales['數量'], errors='coerce').fillna(0)
-            df_sales['日期'] = pd.to_datetime(df_sales['日期'], errors='coerce')
-
-            now = pd.Timestamp.now()
-            # 建立首賣日地圖 (與營收分析同步)
-            first_sale_map = df_sales.groupby('商品名稱')['日期'].min().to_dict()
-            qty_sum = df_sales.groupby('商品名稱')['數量'].sum()
-
-            try:
-                v_threshold = float(self.var_filter_velocity.get())
-                cover_days = int(self.var_days_to_cover.get()) # 您設定的備貨天數 (例如 30)
-            except Exception:
-                v_threshold, cover_days = 0.01, 30
-
-            for _, row in df_prods.iterrows():
-                p_name = str(row['商品名稱'])
-                curr_stock = float(row['目前庫存'])
-                base_safety = float(row['安全庫存'])
-                
-                # --- [1. 統一計算銷售速度] ---
-                st_date = pd.to_datetime(row.get('初始上架時間'), errors='coerce')
-                if pd.isna(st_date):
-                    st_date = first_sale_map.get(p_name, now)
-                
-                days_diff = max((now - st_date).days, 1)
-                velocity = float(qty_sum.get(p_name, 0)) / days_diff
-                
-                # --- [2. 補貨點判定 (Reorder Point)] ---
-                # 預期在等待收貨期間會賣出的量
-                demand_during_leadtime = velocity * cover_days
-                # 補貨臨界值 = 等待期間需求 + 安全庫存
-                reorder_point = demand_during_leadtime + base_safety
-
-                # --- [3. 過濾與顯示邏輯] ---
-                # 只有符合以下任一條件才顯示：
-                # A. 庫存已經低於補貨點且有在賣 (活躍商品)
-                # B. 已經超賣 (負數)
-                # C. 手動設定了安全庫存但現貨不足
-                
-                is_needed = False
-                status = ""
-                row_tag = ""
-                
-                if curr_stock < 0:
-                    is_needed = True
-                    status = "⚠️ 帳面超賣"
-                    row_tag = "urgent"
-                elif curr_stock <= reorder_point and velocity >= v_threshold:
-                    is_needed = True
-                    status = "🔴 需補貨"
-                    row_tag = "urgent"
-                elif curr_stock <= base_safety and base_safety > 0:
-                    is_needed = True
-                    status = "🟡 庫存偏低"
-                    row_tag = "warning"
-                
-                # 若不需要補貨，直接跳過 (這能解決「庫存充足」佔用清單的問題)
-                if not is_needed:
-                    continue
-
-                # 計算建議採購量 (補到 ROP 以上)
-                import math
-                suggest_qty = math.ceil(max(reorder_point - curr_stock, 0))
-
-                self.tree_procure.insert("", "end", values=(
-                    p_name, 
-                    int(curr_stock), 
-                    round(reorder_point, 1), # 這裡顯示補貨警戒值
-                    f"{round(velocity, 2)}件/日", 
-                    status, 
-                    int(suggest_qty)
-                ), tags=(row_tag,))
-                
-        except Exception as e:
-            print(f"採購建議刷新失敗: {e}")
 
 
     def update_calc_prod_list(self):
