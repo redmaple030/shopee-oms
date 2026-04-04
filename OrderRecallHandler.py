@@ -85,7 +85,7 @@ class RecallManager:
                 # 跳轉分頁 (假設銷售輸入在 index 3)
                 app.root.nametowidget(app.root.winfo_children()[0]).select(3) 
                 app.update_totals()
-                messagebox.showinfo("成功", f"訂單 {order_id} 已退回修改並補償庫存。")
+                messagebox.showinfo("成功", f"訂單 {order_id} 已退回修改並重填回庫存。")
 
         except Exception as e:
             messagebox.showerror("撤回失敗", f"錯誤: {e}")
