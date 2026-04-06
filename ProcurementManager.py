@@ -115,6 +115,8 @@ class ProcurementManager:
         except Exception as e:
             print(f"Procurement analysis error: {e}")
 
+
+
     @staticmethod
     def open_stock_correction(app):
         """

@@ -835,6 +835,16 @@ class SalesApp:
             
             df = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
 
+            # 確保售價欄位存在並清理
+            if "預設售價" in df.columns:
+                df["預設售價"] = pd.to_numeric(df["預設售價"], errors='coerce').fillna(0.0)
+            else:
+                df["預設售價"] = 0.0
+                
+            # 同步清理成本與庫存 (專業 ERP 的做法)
+            df["預設成本"] = pd.to_numeric(df.get("預設成本", 0.0), errors='coerce').fillna(0.0)
+            df["目前庫存"] = pd.to_numeric(df.get("目前庫存", 0), errors='coerce').fillna(0).astype(int)
+
             # 1. 基礎補位與清洗
             df['分類Tag'] = df['分類Tag'].fillna("未分類").astype(str).str.strip()
             df['商品名稱'] = df['商品名稱'].fillna("").astype(str).str.strip()
