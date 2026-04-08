@@ -1668,12 +1668,21 @@ class SalesApp:
                 if pd.isna(val) or str(val).lower() == "nan":
                     return default
                 return str(val)
+            
+            def clean_numeric_string(val):
+                if pd.isna(val) or str(val).lower() == "nan":
+                    return ""
+                s = str(val).strip()
+                # 如果字串是以 .0 結尾的數字（例如 123.0），則移除小數點
+                if s.endswith('.0'):
+                    s = s[:-2]
+                return s
 
             self.var_v_name.set(c(row['廠商名稱']))
             self.var_v_channel.set(c(row.get('通路', '')))
-            self.var_v_taxid.set(c(row.get('統編', '')))
+            self.var_v_taxid.set(clean_numeric_string(row.get('統編', '')))    # 修正統編
             self.var_v_contact.set(c(row.get('聯絡人', '')))
-            self.var_v_phone.set(c(row.get('電話', '')))
+            self.var_v_phone.set(clean_numeric_string(row.get('電話', '')))    # 修正電話
             self.var_v_addr.set(c(row.get('地址', '')))
             self.var_v_remarks.set(c(row.get('備註', '')))
             self.var_v_manual_adj.set(str(int(pd.to_numeric(row.get('星等', 5), errors='coerce'))))
@@ -5085,7 +5094,7 @@ class SalesApp:
                 all_data[sheet_name] = df
 
             # 3. 核心數據清洗 (您原本的高階邏輯)
-            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名']
+            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名','統編', '電話']
             for sn, df in all_data.items():
                 if df is None or df.empty: 
                     continue
