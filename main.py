@@ -24,8 +24,6 @@ from OrderRecallHandler import RecallManager
 from ProcurementManager import ProcurementManager
 
 
-
-
 # 1. 匯入敏感資料
 try:
     from secrets_config import SECRET_SALT, AUTH_FILE, RESCUE_SALT, RESCUE_ACCOUNT
@@ -56,11 +54,13 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
     
 
+
 def hash_password(password):
     """ 將密碼加上 Salt 後進行 SHA256 加密 """
     # 延用你之前的 SECRET_SALT，增加破解難度
     salt = SECRET_SALT 
     return hashlib.sha256((password + salt).encode()).hexdigest()
+
 
 
 def secure_hash(text):
@@ -92,12 +92,14 @@ try:
 except ImportError:
     GOOGLE_LIB_INSTALLED = False
 
+
 # 設定 Excel 檔案名稱
 FILE_NAME = resource_path('sales_data.xlsx')
 CREDENTIALS_FILE = resource_path('credentials.json')  
 TOKEN_FILE =  resource_path('token.json')             
 SCOPES = ['https://www.googleapis.com/auth/drive.file'] 
 
+ 
 SHEET_PURCHASES = '進貨紀錄'
 SHEET_PUR_TRACKING = '進貨追蹤'
 SHEET_VENDORS = '進貨廠商管理'
@@ -107,8 +109,6 @@ SHEET_RETURNS = '退貨紀錄'    # 退貨區
 SHEET_PRODUCTS = '商品資料'
 SHEET_FEES = '手續費設定'       # 原本的 '系統設定' 內容搬到這
 SHEET_SYS_SETTINGS = '系統設定'  # 專門存店名、版本、權限等
-
-
 
 
 
@@ -127,6 +127,7 @@ PLATFORM_OPTIONS = [
     "蝦皮購物", "賣貨便(7-11)", "好賣家(全家)", "旋轉拍賣", 
     "官方網站", "Facebook社團", "IG", "PChome", "Momo", "實體店面/面交"
 ]
+
 
 SHIPPING_METHODS = [
     "7-11", "全家", "萊爾富", "OK超商", "蝦皮店到店", 
@@ -248,6 +249,7 @@ class GoogleDriveSync:
             return True, f"系統備份成功\n 雲端檔案: {file_name}\n(系統已自動管理備份數量(最多保留20筆))"
         except Exception as e:
             return False, f"system: failed to upload file: {str(e)}"
+
 
 
     def list_backups(self):
@@ -434,11 +436,14 @@ class SalesApp:
         self.SHEET_CONFIG = SHEET_FEES  
         self.SHEET_SYS_SETTINGS = SHEET_SYS_SETTINGS
 
+        
+
 
 
         self.root.title("蝦皮/網拍進銷存系統 (正式版)")
         self.root.geometry("1280x900") 
         self.var_shop_name = tk.StringVar(value="商店名稱") # 預設名稱
+        self.var_sales_edit_search = tk.StringVar()
         self.file_lock = threading.RLock() # 建立一個全域執行緒鎖 互斥鎖 (Lock)：防止多個線程同時動同一個檔案。
 
         try:
@@ -3493,10 +3498,26 @@ class SalesApp:
         list_frame = ttk.LabelFrame(main_paned, text="銷售歷史紀錄 (點擊項目進行檢視與售後處理)", padding=5)
         main_paned.add(list_frame, weight=3)
 
+         # --- [新增：搜尋工具列] ---
+        search_bar = ttk.Frame(list_frame)
+        search_bar.pack(fill="x", pady=5)
+        
+        ttk.Label(search_bar, text="🔍 快速篩選 (買家ID/商品名):").pack(side="left", padx=5)
+        self.ent_sales_search = ttk.Entry(search_bar, textvariable=self.var_sales_edit_search, width=30)
+        self.ent_sales_search.pack(side="left", padx=5)
+        
+        # 綁定即時搜尋事件
+        self.ent_sales_search.bind("<KeyRelease>", lambda e: self.load_sales_records_for_edit())
+        
+        ttk.Button(search_bar, text="🔄 重新讀取", command=self.load_sales_records_for_edit).pack(side="right")
+        # ----------------------------
+
         # 建立 Treeview
         cols = ("日期", "買家名稱", "商品", "數量", "售價", "手續費", "淨利", "毛利")
         self.tree_sales_edit = ttk.Treeview(list_frame, columns=cols, show='headings', height=12)
-        
+
+        self.tree_sales_edit.tag_configure('after_sales', foreground="#f69895", font=("", 10, "bold")) 
+
         # 設定欄寬
         self.tree_sales_edit.heading("日期", text="日期")
         self.tree_sales_edit.column("日期", width=90)
@@ -3523,9 +3544,7 @@ class SalesApp:
         # 綁定選擇事件
         self.tree_sales_edit.bind("<<TreeviewSelect>>", self.on_sales_edit_select)
 
-        # 重新整理按鈕
-        btn_refresh = ttk.Button(list_frame, text="🔄 重新讀取 Excel", command=self.load_sales_records_for_edit)
-        btn_refresh.pack(fill="x", side="bottom")
+
 
         bottom_container = ttk.PanedWindow(main_paned, orient=tk.HORIZONTAL)
         main_paned.add(bottom_container, weight=2)
@@ -3698,40 +3717,72 @@ class SalesApp:
 
     @thread_safe_file
     def load_sales_records_for_edit(self):
-        """ 讀取銷售紀錄：同步執行資料填充與精準排序 """
+        """ 
+        V5.4 售後追蹤強化版：
+        1. 支援輸入「售後」關鍵字過濾所有處理過的商品。
+        2. 強化排序，確保最新日期在最前。
+        3. 視覺化標記售後項目。
+        """
         for i in self.tree_sales_edit.get_children():
             self.tree_sales_edit.delete(i)
         
         try:
-            if not os.path.exists(FILE_NAME): 
+            if not os.path.exists(self.FILE_NAME): 
                 return
-            # 讀取原始資料
-            df = pd.read_excel(FILE_NAME, sheet_name=SHEET_SALES)
+            df = pd.read_excel(self.FILE_NAME, sheet_name=self.SHEET_SALES)
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-            
             if df.empty: 
                 return
 
-            # --- [關鍵修正 A：在記憶體中填充空值] ---
-            # 確保統計與顯示時，每一行都有完整的買家資訊，解決 nan 問題
-            fill_cols = ['訂單編號', '日期', '買家名稱', '交易平台', '寄送方式', '取貨地點']
-            # 先將編號轉為字串方便分組
-            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True)
-            # 使用 ffill 補齊資訊
+            # --- [數據預處理] ---
+            df['訂單編號'] = df['訂單編號'].astype(str).str.replace(r'^\'', '', regex=True).str.replace(r'\.0$', '', regex=True).str.strip()
+            
+            fill_cols = ['日期', '買家名稱', '交易平台', '寄送方式', '取貨地點']
+            df[fill_cols] = df[fill_cols].replace(r'^\s*$', pd.NA, regex=True)
             df[fill_cols] = df.groupby('訂單編號', group_keys=False)[fill_cols].ffill().bfill()
 
-            # --- [關鍵修正 B：排序並儲存至暫存變數] ---
+            # --- [核心過濾邏輯：售後關鍵字攔截] ---
+            query = self.var_sales_edit_search.get().lower().strip()
+            
+            if query:
+                if query == "售後":
+                    # 特殊搜尋：抓取『扣費項目』中有括號標記的列 (這是我們售後功能存檔的格式)
+                    # 格式範例: [補寄商品:-$50.0]
+                    mask = df['扣費項目'].astype(str).str.contains(r'\[.*:-\$')
+                else:
+                    # 一般搜尋：買家、商品、編號、或特定的售後類型（如：補寄）
+                    mask = (
+                        df['買家名稱'].astype(str).str.lower().str.contains(query) |
+                        df['商品名稱'].astype(str).str.lower().str.contains(query) |
+                        df['訂單編號'].astype(str).str.lower().str.contains(query) |
+                        df['扣費項目'].astype(str).str.lower().str.contains(query)
+                    )
+                df = df[mask]
+
+            # --- [排序：日期最新在前] ---
             df['tmp_dt'] = pd.to_datetime(df['日期'], errors='coerce')
             df = df.sort_values(by=['tmp_dt', '訂單編號'], ascending=[False, False])
             
-            # 將這份「排序好且填滿資訊」的資料存入 self，供點擊時讀取
             self.sales_edit_df = df.copy() 
 
+            # --- [視覺填充與顯示] ---
+            prev_id = None
             for idx, row in df.iterrows():
-                # idx 現在是原始 DataFrame 的標籤 (Label)
-                self.tree_sales_edit.insert("", "end", text=str(idx), values=(
-                    row.get('日期', ''),
-                    row.get('買家名稱', ''),
+                curr_id = str(row['訂單編號'])
+                disp_date = "" if curr_id == prev_id else str(row.get('日期', ''))
+                disp_buyer = "" if curr_id == prev_id else str(row.get('買家名稱', ''))
+                prev_id = curr_id
+
+                # 判斷這行是否為售後項目 (用於套用顏色)
+                is_after_sales = False
+                remark_val = str(row.get('扣費項目', ''))
+                if '[' in remark_val and ':-$' in remark_val:
+                    is_after_sales = True
+
+                # 寫入 Treeview
+                item_id = self.tree_sales_edit.insert("", "end", text=str(idx), values=(
+                    disp_date,
+                    disp_buyer,
                     row.get('商品名稱', ''),
                     row.get('數量', 0),
                     row.get('單價(售)', 0),
@@ -3739,8 +3790,13 @@ class SalesApp:
                     row.get('總淨利', 0),
                     f"{row.get('毛利率', 0)}%"
                 ))
+                
+                # 如果是售後件，套用紅字標籤
+                if is_after_sales:
+                    self.tree_sales_edit.item(item_id, tags=('after_sales',))
+
         except Exception as e:
-            print(f"讀取歷史列表失敗: {e}")
+            print(f"System Error (load_sales_edit): {e}")
 
 
     @thread_safe_file
@@ -5053,6 +5109,7 @@ class SalesApp:
     @thread_safe_file
     def _universal_save(self, updates_dict,is_undo=False):
         import copy
+        
 
         """ 
         更新 還原功能
@@ -5094,7 +5151,7 @@ class SalesApp:
                 all_data[sheet_name] = df
 
             # 3. 核心數據清洗 (您原本的高階邏輯)
-            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名','統編', '電話']
+            text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名', '統編']
             for sn, df in all_data.items():
                 if df is None or df.empty: 
                     continue
