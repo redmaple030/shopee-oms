@@ -1,3 +1,4 @@
+from decimal import Decimal
 import tkinter as tk
 from tkinter import ttk, messagebox
 import pandas as pd
@@ -136,61 +137,105 @@ class LogisticsWizard(tk.Toplevel):
         self.ent_logi.config(state=state)
 
     def save(self):
-        """ 執行存檔邏輯 """
+        """ 
+        執行存檔邏輯 V7.3 (型別與精度強化版)
+        1. 解決 float64 與 int64 衝突。
+        2. 使用 Decimal 確保金流計算精確度。
+        3. 同步更新追蹤表與歷史表的數量、總額與狀態。
+        """
         if self.is_mixed_orders and not self.var_skip_logi.get():
             if not messagebox.askyesno("二次確認", "您正在跨單編輯且未開啟單號保護，確定要覆蓋單號嗎？"):
                 return
 
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            # 透過 app_instance 讀取資料
+            # 讀取資料
             with pd.ExcelFile(self.FILE_NAME) as xls:
                 df_track = pd.read_excel(xls, sheet_name=self.SHEET_TRACK)
                 df_hist = pd.read_excel(xls, sheet_name=self.SHEET_HIST)
 
-            # 數據清洗
-            text_cols = ['物流狀態', '物流追蹤', '備註', '進貨單號', '商品名稱', '時間_廠商出貨', 
-                         '時間_抵達集運倉', '時間_集運倉出貨', '時間_抵達台灣海關', '時間_國內配送中']
+            # --- [核心修正 1：強制型別提升 (Type Promotion)] ---
+            # 為了防止 Pandas 將空欄位或整數欄位鎖定為 int64，我們預先將數值欄位轉為 float
+            numeric_cols = ['數量', '進貨單價', '進貨總額', '分攤運費', '海關稅金', '瑕疵數量', '原始預計數量']
+            for df in [df_track, df_hist]:
+                for col in numeric_cols:
+                    if col in df.columns:
+                        # 先處理 nan，再強轉 float 容納小數點
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
+
+            # --- [核心修正 2：數據清洗防止 nan 字串產生] ---
+            text_cols = ['物流狀態', '物流追蹤', '備註', '進貨單號', '商品名稱', 
+                         '時間_廠商出貨', '時間_抵達集運倉', '時間_集運倉出貨', '時間_抵達台灣海關', '時間_國內配送中']
             for df in [df_track, df_hist]:
                 for col in text_cols:
                     if col not in df.columns:
                         df[col] = ""
-                df[text_cols] = df[text_cols].fillna("").astype(str).replace(['nan', 'NaN', 'None'], '')
+                    # 徹底切斷與 NaN 的聯繫
+                    df[col] = df[col].fillna("").astype(str).replace(['nan', 'NaN', 'None', '<NA>'], '')
 
+            # --- [核心修正 3：執行數據更新] ---
             for item in self.batch_list:
                 t_idx = item['df_idx']
+                
+                # 1. 更新追蹤表基本資訊
                 df_track.at[t_idx, '物流狀態'] = self.var_status.get()
                 df_track.at[t_idx, '備註'] = self.var_remark.get().strip()
 
                 if not self.var_skip_logi.get() and self.var_logi.get().strip():
                     df_track.at[t_idx, '物流追蹤'] = f"'{self.var_logi.get().strip()}"
 
+                # 2. 處理數量與金額 (使用主程式的 dec_round 確保精度)
                 if not self.is_batch:
-                    df_track.at[t_idx, '數量'] = self.var_qty.get()
-                    u_price = pd.to_numeric(df_track.at[t_idx, '進貨單價'], errors='coerce')
-                    df_track.at[t_idx, '進貨總額'] = self.var_qty.get() * u_price
+                    # 轉為 Decimal 運算，徹底消滅 980.000...01 這種鬼影
+                    d_new_q = Decimal(str(self.var_qty.get()))
+                    d_u_price = Decimal(str(df_track.at[t_idx, '進貨單價']))
+                    d_new_total = self.app.dec_round(d_new_q * d_u_price)
+                    d_defects = Decimal(str(self.var_defects.get()))
 
-                time_map = {"廠商已發貨": "時間_廠商出貨", "貨到集運倉": "時間_抵達集運倉", 
-                            "集運倉已發貨": "時間_集運倉出貨", "抵達台灣海關": "時間_抵達台灣海關", "國內配送中": "時間_國內配送中"}
-                col = time_map.get(self.var_status.get())
-                if col: 
-                    df_track.at[t_idx, col] = today
+                    # 回填至 DataFrame (轉回 float 存入 Excel)
+                    df_track.at[t_idx, '數量'] = float(d_new_q)
+                    df_track.at[t_idx, '瑕疵數量'] = float(d_defects)
+                    df_track.at[t_idx, '進貨總額'] = float(d_new_total)
 
-                # 同步歷史表
+                # 3. 紀錄時間戳記
+                time_map = {
+                    "廠商已發貨": "時間_廠商出貨", 
+                    "貨到集運倉": "時間_抵達集運倉", 
+                    "集運倉已發貨": "時間_集運倉出貨", 
+                    "抵達台灣海關": "時間_抵達台灣海關", 
+                    "國內配送中": "時間_國內配送中"
+                }
+                current_time_col = time_map.get(self.var_status.get())
+                if current_time_col:
+                    df_track.at[t_idx, current_time_col] = today
+
+                # 4. 同步更新歷史表 (依單號+品名精準匹配)
                 h_mask = (df_hist['進貨單號'].str.replace("'", "").str.strip() == item['pur_id']) & \
                          (df_hist['商品名稱'].str.strip() == item['p_name'])
+                
                 if not df_hist[h_mask].empty:
                     df_hist.loc[h_mask, '物流狀態'] = self.var_status.get()
                     df_hist.loc[h_mask, '備註'] = self.var_remark.get().strip()
-                    if col: 
-                        df_hist.loc[h_mask, col] = today
+                    if current_time_col:
+                        df_hist.loc[h_mask, current_time_col] = today
+                    
+                    # 處理單號保護
                     if not self.var_skip_logi.get() and self.var_logi.get().strip():
                         df_hist.loc[h_mask, '物流追蹤'] = df_track.at[t_idx, '物流追蹤']
 
-            # 呼叫主程式的萬用引擎存檔
+                    # 同步數量與總額 (僅單筆模式)
+                    if not self.is_batch:
+                        df_hist.loc[h_mask, '數量'] = float(d_new_q)
+                        df_hist.loc[h_mask, '瑕疵數量'] = float(d_defects)
+                        df_hist.loc[h_mask, '進貨總額'] = float(d_new_total)
+
+            # 5. 呼叫主程式萬用引擎存檔 (一次更新兩個分頁)
             if self.app._universal_save({self.SHEET_TRACK: df_track, self.SHEET_HIST: df_hist}):
-                messagebox.showinfo("成功", "物流資訊同步更新成功")
+                messagebox.showinfo("成功", "資料已精確校準並同步更新成功")
                 self.app.load_purchase_tracking()
                 self.destroy()
+
         except Exception as e:
-            messagebox.showerror("錯誤", f"存檔失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("存檔失敗", f"型別或計算衝突: {e}")
