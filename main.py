@@ -438,6 +438,7 @@ class SalesApp:
         self.SHEET_CONFIG = SHEET_FEES  
         self.SHEET_SYS_SETTINGS = SHEET_SYS_SETTINGS
         self.SHEET_AFTER_SALES = SHEET_AFTER_SALES
+
         
 
 
@@ -474,6 +475,7 @@ class SalesApp:
         self.drive_manager = GoogleDriveSync()
 
         # --- 變數初始化 ---
+        self.var_original_name = tk.StringVar()
         self.var_add_weight = tk.DoubleVar(value=1.0) # 新增商品權重用
         self.var_upd_weight = tk.DoubleVar(value=1.0) # 修改商品權重用
         self.fee_lookup = {}
@@ -2173,7 +2175,7 @@ class SalesApp:
                 total_p_qty = group['數量'].sum()
                 total_p_sales = group['銷額_D'].sum()
                 total_p_raw_profit = group['淨利_D'].sum()
-                
+            
                 # 【核心修正】：扣除該商品的累積售後支出
                 p_after_loss = Decimal(str(as_prod_map.get(p_name, 0)))
                 total_p_final_profit = total_p_raw_profit - p_after_loss
@@ -3081,7 +3083,7 @@ class SalesApp:
 
         # 必選欄位
         ttk.Label(self.edit_frame, text="名稱:").grid(row=curr_row, column=0, **e_opts)
-        ttk.Entry(self.edit_frame, textvariable=self.var_upd_name, state="readonly").grid(row=curr_row, column=1, sticky="ew")
+        ttk.Entry(self.edit_frame, textvariable=self.var_upd_name, state="normal").grid(row=curr_row, column=1, sticky="ew")
         
 
         if self.show_fields["商品編號"].get():
@@ -5746,6 +5748,8 @@ class SalesApp:
             # 格式: [分類] 商品名稱 (庫存: 數量)
             temp = display_str.rsplit(" (庫存:", 1)[0]
             selected_name = temp.split("]", 1)[1].strip() if "]" in temp else temp
+            self.var_original_name.set(selected_name)
+
 
             # 3. 搜尋對應資料 (加上 strip 防止空格干擾)
             record = self.products_df[self.products_df['商品名稱'].astype(str).str.strip() == selected_name]
@@ -5858,89 +5862,110 @@ class SalesApp:
 
     @thread_safe_file
     def submit_update_product(self):
-        name = self.var_upd_name.get()
-        if not name:
+        """ 
+        商品資料更新：支援全域連鎖改名功能 (Cascading Update)
+        """
+        # 1. 取得新舊名稱
+        old_name = self.var_original_name.get().strip()
+        new_name = self.var_upd_name.get().strip()
+        
+        if not new_name:
+            messagebox.showwarning("警告", "商品名稱不能為空")
             return
         
         try:
-            # --- [安全數值抓取] ---
-            # 使用 try-except 確保即使介面上有 NaN 字樣，程式也不會崩潰
-            try:
-                new_cost = float(self.var_upd_cost.get())
-            except Exception:
-                new_cost = 0.0
-            
-            try:
-                new_stock = int(self.var_upd_stock.get())
-            except Exception:
-                new_stock = 0
+            # 2. 讀取主檔資料
+            with pd.ExcelFile(FILE_NAME) as xls:
+                df_prods = pd.read_excel(xls, sheet_name=SHEET_PRODUCTS)
+                
+                # 準備存檔字典 (預設只存商品主檔)
+                update_payload = {}
 
-            try:
-                new_safety = int(self.var_upd_safety.get())
-            except Exception:
-                new_safety = 0
+                # --- [關鍵邏輯：處理改名] ---
+                if old_name != new_name and old_name != "":
+                    # A. 檢查新名字是否與現有其他商品重複
+                    if new_name.lower() in df_prods['商品名稱'].astype(str).str.lower().values:
+                        messagebox.showerror("修改失敗", f"名稱「{new_name}」已存在！")
+                        return
 
-            try:
-                new_weight = float(self.var_upd_weight.get())
-            except Exception:
-                new_weight = 1.0
+                    # B. 詢問確認
+                    if not messagebox.askyesno("全域改名確認", 
+                        f"您正在將「{old_name}」更名為「{new_name}」。\n\n"
+                        "系統將自動搜尋並替換所有歷史銷售、進貨、追蹤與售後紀錄。\n"
+                        "此操作將維持分析數據的完整性，確定要執行嗎？"):
+                        return
+
+                    # C. 遍歷所有包含『商品名稱』的分頁進行連鎖更新
+                    # 列出所有需要掃描的分頁變數名稱
+                    target_sheets = [
+                        SHEET_SALES, SHEET_PURCHASES, SHEET_TRACKING, 
+                        SHEET_PUR_TRACKING, SHEET_RETURNS, SHEET_AFTER_SALES
+                    ]
+
+                    for sn in target_sheets:
+                        if sn in xls.sheet_names:
+                            df_temp = pd.read_excel(xls, sheet_name=sn)
+                            if '商品名稱' in df_temp.columns:
+                                # 執行批次替換邏輯
+                                df_temp['商品名稱'] = df_temp['商品名稱'].replace(old_name, new_name)
+                                update_payload[sn] = df_temp
+                                print(f"System: Renamed '{old_name}' in sheet [{sn}]")
+
+            # 3. 更新商品主檔 (SHEET_PRODUCTS) 的數值
+            idx = df_prods[df_prods['商品名稱'] == old_name].index
+            if idx.empty:
+                messagebox.showerror("錯誤", "找不到原始紀錄，請重新整理清單。")
+                return
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             
-            # 1. 讀取商品資料分頁
-            df_prods = pd.read_excel(FILE_NAME, sheet_name=SHEET_PRODUCTS)
-            
-            # 2. 定位商品
-            idx = df_prods[df_prods['商品名稱'] == name].index
-            if not idx.empty:
-                # 取得舊庫存 (處理可能的 NaN)
-                old_stock = df_prods.loc[idx, '目前庫存'].values[0]
-                if pd.isna(old_stock):
-                    old_stock = 0
-                
-                # --- [補齊舊資料欄位/補貨邏輯] ---
-                if "初始上架時間" not in df_prods.columns:
-                    df_prods["初始上架時間"] = "" # 先建立空欄位
-                if "最後進貨時間" not in df_prods.columns: 
-                    df_prods["最後進貨時間"] = df_prods["最後更新時間"]
+            # 取得 UI 上的新值 (加入您的安全抓取邏輯)
+            try:
+                new_cost = float(self.var_upd_cost.get())
+                new_stock = int(self.var_upd_stock.get())
+                new_safety = int(self.var_upd_safety.get())
+                new_price = float(self.var_upd_price.get())
+                new_weight = float(self.var_upd_weight.get())
+            except Exception:
+                messagebox.showerror("錯誤", "請檢查數字格式是否正確")
+                return
 
-                mask_empty = df_prods["初始上架時間"].isna() | (df_prods["初始上架時間"] == "")
-                df_prods.loc[mask_empty, "初始上架時間"] = df_prods.loc[mask_empty, "最後更新時間"]
+            # 更新該行數據
+            df_prods.loc[idx, '商品名稱'] = new_name
+            df_prods.loc[idx, '商品編號'] = self.var_upd_sku.get()
+            df_prods.loc[idx, '分類Tag'] = self.var_upd_tag.get()
+            df_prods.loc[idx, '預設成本'] = new_cost
+            df_prods.loc[idx, '預設售價'] = new_price
+            df_prods.loc[idx, '目前庫存'] = new_stock
+            df_prods.loc[idx, '安全庫存'] = new_safety
+            df_prods.loc[idx, '商品連結'] = self.var_upd_url.get()
+            df_prods.loc[idx, '商品備註'] = self.var_upd_remarks.get()
+            df_prods.loc[idx, '單位權重'] = new_weight
+            df_prods.loc[idx, '最後更新時間'] = now_str
 
-                if new_stock > old_stock:
-                    df_prods.loc[idx, '最後進貨時間'] = now_str
-                    print(f"system: detected restock for product {name}, updated restock time.")
+            # 將主檔加入存檔字典
+            update_payload[SHEET_PRODUCTS] = df_prods
+
+            # 4. 呼叫萬用引擎「一次性」儲存所有受影響的分頁 (Atomic Write)
+            if self._universal_save(update_payload):
+                self.products_df = self.load_products() 
+                self.update_mgmt_prod_list()
+                self.update_sales_prod_list()
+                self.update_pur_prod_list()
+                self.var_original_name.set(new_name) # 更新暫存的原名
+                self.var_upd_time.set(now_str) 
                 
-                # --- [更新資料列] ---
-                df_prods.loc[idx, '商品編號'] = self.var_upd_sku.get()
-                df_prods.loc[idx, '分類Tag'] = self.var_upd_tag.get()
-                df_prods.loc[idx, '商品名稱'] = self.var_upd_name.get()
-                df_prods.loc[idx, '預設成本'] = new_cost
-                df_prods.loc[idx, '預設售價'] = float(self.var_upd_price.get())
-                df_prods.loc[idx, '目前庫存'] = new_stock
-                df_prods.loc[idx, '安全庫存'] = new_safety
-                df_prods.loc[idx, '商品連結'] = self.var_upd_url.get()
-                df_prods.loc[idx, '商品備註'] = self.var_upd_remarks.get()
-                df_prods.loc[idx, '單位權重'] = new_weight
-                df_prods.loc[idx, '最後更新時間'] = now_str
+                # 重新觸發分析計算，確保報表顯示新名稱
+                self.calculate_analysis_data()
                 
-                # --- [呼叫萬用存檔引擎] ---
-                # 這是最強的保護措施，它會自動讀取 SHEET_SALES, SHEET_TRACKING 等所有分頁
-                # 並一次性寫回，防止任何資料丟失。
-                if self._universal_save({SHEET_PRODUCTS: df_prods}):
-                    # 更新成功後的後續動作
-                    self.products_df = self.load_products() 
-                    self.update_mgmt_prod_list()
-                    self.update_sales_prod_list() # 讓銷售頁面也同步看到新庫存
-                    self.var_upd_time.set(now_str) 
-                    messagebox.showinfo("成功", f"商品「{name}」資訊已更新！")
+                messagebox.showinfo("成功", f"商品「{old_name}」已成功更名為「{new_name}」並完成全表連鎖更新。")
                 
         except PermissionError: 
             messagebox.showerror("錯誤", "Excel 檔案未關閉，無法寫入！")
         except Exception as e:
             import traceback
-            traceback.print_exc() # 在後台印出詳細錯誤以便除錯
-            messagebox.showerror("錯誤", f"更新失敗: {e}")
+            traceback.print_exc()
+            messagebox.showerror("錯誤", f"全域更新失敗: {e}")
     
     @thread_safe_file
     def delete_product(self):
