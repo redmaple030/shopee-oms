@@ -5194,13 +5194,40 @@ class SalesApp:
             # -----------------------------------------------
             
             # 2. 更新資料並進行保護
+            # 宣告允許清空的緩衝分頁（採用雙重對照：中文字串與變數併行，防堵變數範圍失效）
+            ALLOW_EMPTY_SHEETS = [
+                "進貨追蹤", 
+                "訂單追蹤", 
+                "退貨紀錄", 
+                "售後明細",
+                SHEET_TRACKING, 
+                SHEET_PUR_TRACKING, 
+                SHEET_RETURNS, 
+                SHEET_AFTER_SALES
+            ]
+
             for sheet_name, df in updates_dict.items():
-                # 數據完整性保護：防止意外存入空表
-                if sheet_name in all_data and not all_data[sheet_name].empty:
-                    if df is None or df.empty:
-                        print(f"[WARNING] Blocked empty save attempt for sheet: {sheet_name}")
+                if df is None:
+                    print(f"[DEBUG] ⚠️ 拒絕寫入 None 物件至分頁: {sheet_name}")
+                    continue
+                
+                # 數據完整性保護：如果要存入的是空表（0筆資料）
+                if df.empty:
+                    # 檢查該分頁是否在允許清空的白名單中
+                    is_allowed = (sheet_name in ALLOW_EMPTY_SHEETS) or \
+                                 (sheet_name == self.SHEET_PUR_TRACKING) or \
+                                 (sheet_name == self.SHEET_TRACKING)
+                    
+                    if is_allowed:
+                        print(f"[DEBUG] ✅ 允許清空緩衝分頁: {sheet_name}")
+                    else:
+                        # 關鍵主檔（如：商品資料、系統設定），進行防呆保護阻止清空
+                        print(f"[WARNING] ❌ 拒絕清空關鍵主檔分頁: {sheet_name} (已自動攔截存檔)")
                         continue 
+                        
                 all_data[sheet_name] = df
+
+
 
             # 3. 核心數據清洗 (您原本的高階邏輯)
             text_protection_cols = ['訂單編號', '進貨單號', '物流追蹤', '商品編號', '廠商名稱', '商店名', '統編']

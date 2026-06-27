@@ -7,7 +7,7 @@ __pycache__/
 secrets_config.py
 credentials.json
 token.json
-
+test
 # --- 使用者個人驗證與授權 (絕對不能上傳) ---
 sys_config.bin
 license.json
